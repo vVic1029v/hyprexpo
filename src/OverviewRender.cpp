@@ -289,10 +289,14 @@ void COverview::fullRender() {
     const int   HOVER_ROUND_SCALED   = **PTILEROUNDH >= 0 ? std::max(0, (int)std::lround((double)**PTILEROUNDH * MON->m_scale)) : BASE_ROUND_SCALED;
     const float ROUND_PWR            = **PTOUNDPWR;
 
+    // Fitted drawer hides the ribbon (tiles, labels, borders, proxies) so
+    // the app grid owns the surface. Threshold mirrors regionAtPoint(),
+    // keeping pixels and hit-testing in agreement.
+    bool entryAnimationPending = false;
+    if (drawer.anim < 0.5f) {
     std::vector<CBox> tileBoxes(images.size());
     const bool        entryAnimationActive = animateEntry && !closing;
-    bool              entryAnimationPending = false;
-    const double      entryElapsed = entryAnimationActive ? std::chrono::duration<double>(std::chrono::steady_clock::now() - createdAt).count() : 0.0;
+    const double entryElapsed = entryAnimationActive ? std::chrono::duration<double>(std::chrono::steady_clock::now() - createdAt).count() : 0.0;
 
     for (size_t y = 0; y < (size_t)SHAPE.rows; ++y) {
         for (size_t x = 0; x < (size_t)SHAPE.cols; ++x) {
@@ -695,6 +699,8 @@ void COverview::fullRender() {
             }
         }
     }
+
+    } // showRibbon (drawer fitted hides the workspace ribbon)
 
     drawerStepAnim();
     renderDrawerPass();
