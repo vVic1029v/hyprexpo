@@ -152,4 +152,10 @@ void registerHyprexpoConfigValues() {
     addConfigValue(makeShared<Config::Values::CIntValue>("plugin:hyprexpo:keynav_wrap_v", "key navigation vertical wrap", HyprexpoConfig::KEYNAV_WRAP_V_DEFAULT));
     // default off: spatial moves by default
     addConfigValue(makeShared<Config::Values::CIntValue>("plugin:hyprexpo:keynav_reading_order", "key navigation reading order", HyprexpoConfig::KEYNAV_READING_ORDER_DEFAULT));
+    // in-expose app drawer (ribbon on top, search middle, grid bottom)
+    addConfigValue(makeShared<Config::Values::CIntValue>("plugin:hyprexpo:drawer_enable", "app drawer section toggle", HyprexpoConfig::DRAWER_ENABLE_DEFAULT));
+    addConfigValue(makeShared<Config::Values::CIntValue>("plugin:hyprexpo:drawer_columns", "app grid columns", HyprexpoConfig::DRAWER_COLUMNS_DEFAULT));
+    addConfigValue(makeShared<Config::Values::CIntValue>("plugin:hyprexpo:drawer_search_h", "search strip height px", HyprexpoConfig::DRAWER_SEARCH_H_DEFAULT));
+    addConfigValue(makeShared<Config::Values::CIntValue>("plugin:hyprexpo:drawer_expand_px", "drag distance px that expands/collapses the drawer", HyprexpoConfig::DRAWER_EXPAND_PX_DEFAULT));
+    addConfigValue(makeShared<Config::Values::CIntValue>("plugin:hyprexpo:drawer_icon_px", "app icon px", HyprexpoConfig::DRAWER_ICON_PX_DEFAULT));
 }

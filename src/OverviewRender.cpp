@@ -696,6 +696,9 @@ void COverview::fullRender() {
         }
     }
 
+    drawerStepAnim();
+    renderDrawerPass();
+
     if (entryAnimationPending)
         damage();
 }

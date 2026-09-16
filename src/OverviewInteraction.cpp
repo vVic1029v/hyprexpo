@@ -76,10 +76,12 @@ void COverview::updateHoveredFromMouse() {
         return;
 
     const int newHoveredID = tileIndexAtPoint(lastMousePosLocal, size->value(), GAP_WIDTH, currentOuterInset(), true);
-    if (newHoveredID == hoveredID)
+    const int newApp = drawerAppAt(lastMousePosLocal);
+    if (newHoveredID == hoveredID && newApp == drawer.hoverApp)
         return;
 
     hoveredID = newHoveredID;
+    drawer.hoverApp = newApp;
     damage();
 }
 
@@ -364,9 +366,12 @@ COverview* COverview::touchOwner(int32_t touchID) {
 
 void COverview::cancelTouchPress() {
     touchPress.holdTimer.reset();
-    touchPress.active   = false;
-    touchPress.dragging = false;
-    touchPress.touchID  = -1;
+    touchPress.active      = false;
+    touchPress.dragging    = false;
+    touchPress.touchID     = -1;
+    touchPress.region      = (int)ERegion::None;
+    touchPress.appIndex    = -1;
+    touchPress.pinConsumed = false;
     touchPress.monitor.reset();
 }
 
@@ -380,6 +385,9 @@ void COverview::touchPressDown(int32_t touchID, const Vector2D& global, const PH
     touchPress.lastGlobal  = global;
     touchPress.dragging    = false;
     touchPress.monitor     = monitor;
+    touchPress.region      = (int)regionAtPoint(global - monitor->m_position);
+    touchPress.appIndex    = -1;
+    touchPress.pinConsumed = false;
     // hover feedback under the finger while undecided
     lastMousePosLocal = global - monitor->m_position;
     updateHoveredFromMouse();
@@ -414,7 +422,23 @@ void COverview::touchMotionEvent(int32_t touchID, const Vector2D& pos) {
 void COverview::touchPressMotion(int32_t touchID, const Vector2D& global) {
     if (!touchPress.active || touchPress.touchID != touchID || closing)
         return;
+    const double dy = global.y - touchPress.lastGlobal.y;
     touchPress.lastGlobal = global;
+    if (touchPress.region == (int)ERegion::Grid) {
+        // vertical finger motion scrolls/expands/collapses the drawer
+        drawerScrollBy(dy);
+        const auto MON = touchPress.monitor.lock();
+        if (MON) {
+            const int idx = drawerAppAt(global - MON->m_position);
+            if (idx != drawer.hoverApp) {
+                drawer.hoverApp = idx;
+                damage();
+            }
+        }
+        return;
+    }
+    if (touchPress.region != (int)ERegion::Ribbon)
+        return; // Search: hold still, tap focuses on release
     if (!touchPress.dragging) {
         // fast flicks engage on distance alone, like the mouse path
         const auto d = global - touchPress.downGlobal;
@@ -435,6 +459,21 @@ void COverview::touchPressMotion(int32_t touchID, const Vector2D& global) {
 void COverview::engageTouchDrag() {
     if (!touchPress.active || touchPress.dragging || closing)
         return;
+    if (touchPress.region == (int)ERegion::Grid) {
+        // long-press an app tile pins/unpins it instead of dragging
+        const auto MON = touchPress.monitor.lock();
+        if (MON) {
+            const int idx = drawerAppAt(touchPress.lastGlobal - MON->m_position);
+            if (idx >= 0) {
+                drawerTogglePin((size_t)idx);
+                touchPress.pinConsumed = true;
+            }
+        }
+        touchPress.holdTimer.reset();
+        return;
+    }
+    if (touchPress.region != (int)ERegion::Ribbon)
+        return;
     static auto* const* PDRAGDROPENABLE = (Hyprlang::INT* const*)HyprlandAPI::getConfigValue(PHANDLE, "plugin:hyprexpo:drag_drop_enable")->getDataStaticPtr();
     if (!**PDRAGDROPENABLE)
         return;
@@ -451,11 +490,29 @@ void COverview::touchPressUp(int32_t touchID) {
     if (!OWNER)
         return;
     const bool        wasDragging = OWNER->touchPress.dragging;
+    const bool        wasPin      = OWNER->touchPress.pinConsumed;
+    const int         region      = OWNER->touchPress.region;
     const Vector2D    upGlobal    = OWNER->touchPress.lastGlobal;
+    const Vector2D    downGlobal  = OWNER->touchPress.downGlobal;
     const PHLMONITOR  mon         = OWNER->touchPress.monitor.lock();
     OWNER->cancelTouchPress();
-    if (OWNER->closing)
+    if (OWNER->closing || !mon)
         return;
+    const Vector2D upLocal = upGlobal - mon->m_position;
+    if (region == (int)COverview::ERegion::Grid) {
+        if (wasPin)
+            return; // pin toggled on hold; release is a no-op
+        const auto md = upGlobal - downGlobal;
+        if (std::hypot(md.x, md.y) >= 12.0)
+            return; // was a scroll, not a tap
+        OWNER->drawerTap(upLocal, false);
+        return;
+    }
+    if (region == (int)COverview::ERegion::Search) {
+        OWNER->drawer.searchFocused = true;
+        OWNER->damage();
+        return;
+    }
     if (wasDragging) {
         // drop: move the window (or no-op) and never fall through to select
         if (auto* const SOURCE = gridOverviewForMonitorKey(g_overviewDrag.state.sourceMonitorKey))

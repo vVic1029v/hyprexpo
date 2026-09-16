@@ -3,6 +3,7 @@
 #define WLR_USE_UNSTABLE
 
 #include "globals.hpp"
+#include "Drawer.hpp"
 #include "IOverviewSession.hpp"
 #include "HyprexpoLogic.hpp"
 #include <hyprland/src/desktop/DesktopTypes.hpp>
@@ -13,6 +14,7 @@
 #include <hyprland/src/managers/eventLoop/EventLoopTimer.hpp>
 #include <chrono>
 #include <functional>
+#include <map>
 #include <memory>
 #include <string>
 #include <vector>
@@ -77,8 +79,7 @@ class COverview final : public IOverviewSession {
     bool                                 setKeyboardFocus(int tileIndex);
 
     bool blocksOverviewRendering() const override { return blockOverviewRendering; }
-    bool blocksDamageReporting() const override { return blockDamageReporting; }
-    bool isSwiping() const override { return m_isSwiping; }
+    bool blocksDamageReporting() const override { return blockDamageReporting; }    bool isSwiping() const override { return m_isSwiping; }
     bool ownsPointerInput() const override;
     PHLMONITOR monitor() const override { return pMonitor.lock(); }
     uint64_t sessionGeneration() const override { return m_sessionGeneration; }
@@ -125,6 +126,76 @@ class COverview final : public IOverviewSession {
     bool       moveFocus(int dx, int dy);
     int        tileForWorkspaceID(int wsid) const;
     int        tileForVisibleIndex(int vIdx) const;
+
+  public:
+    // Drawer + ribbon public surface: dispatchers, search-key routing and
+    // tests reach in here. Everything below stays private again afterwards.
+    // In-expose app drawer regions. Ribbon owns the workspace grid (top
+    // band); then a thin search strip; the app grid owns everything below.
+    enum class ERegion { None, Ribbon, Search, Grid };
+
+    struct SDrawerState {
+        bool        fitted       = false;  // docked: 1 pinned row; fitted: fill + scroll
+        float       anim         = 0.f;    // 0 docked -> 1 fitted, stepped per frame
+        double      lastStepS    = 0.0;    // last anim step timestamp (0 = unset)
+        double      scroll       = 0.0;    // content scroll px (fitted only)
+        double      pull         = 0.0;    // expand/collapse drag accumulator px
+        bool        scanned      = false;  // app model scanned for this open
+        int         hoverApp     = -1;     // filtered-list index under pointer
+        bool        searchFocused = false;
+        std::string query;
+        bool        queryDirty   = true;
+        // model (rescanned per overview open) + texture caches (cleared on close)
+        std::vector<Hyprexpo::Drawer::SApp>      apps;
+        std::vector<std::string>                 pins;
+        std::vector<size_t>                      order;
+        std::map<std::string, SP<Render::ITexture>> iconTex;
+        std::map<std::string, SP<Render::ITexture>> labelTex;
+        SP<Render::ITexture>                       searchTex;
+        // mouse drawer press (parallel to the touch press above)
+        bool     mouseArmed = false;
+        int      mouseApp   = -1;
+        Vector2D mouseDown{};
+        bool     mouseMoved = false;
+    };
+    SDrawerState drawer;
+
+    // Ribbon geometry: workspace tiles live in the top band only. All tile
+    // math flows through tileBoxForIndex/tileIndexAtPoint, so every consumer
+    // (render, hover, drag, labels, damage) follows automatically.
+    static double ribbonBandH(double totalH) { return 0.34 * totalH; }
+    double     ribbonH() const;
+    double     searchH() const;
+    double     searchTop() const;   // y where the search strip starts
+    double     drawerTop() const;   // y where the app grid starts
+    ERegion    regionAtPoint(const Vector2D& local) const;
+    // Drawer grid geometry + hit test (index into drawer.order, -1 none).
+    int        drawerCols() const;
+    double     drawerTileW() const;
+    double     drawerRowH() const;
+    double     drawerClipH() const;  // visible grid height (animates on snap)
+    double     drawerContentH() const;
+    double     drawerMaxScroll() const;
+    int        drawerAppAt(const Vector2D& local) const;
+    CBox       drawerTileBox(int orderIdx) const;
+    void       drawerRescan();
+    void       drawerRefilter();
+    void       drawerClearCaches();
+    void       drawerSetFitted(bool fitted);
+    void       drawerScrollBy(double dy);
+    void       drawerTap(const Vector2D& local, bool rightClick);
+    void       drawerTogglePin(size_t orderIdx);
+    void       drawerLaunch(size_t orderIdx);
+    void       drawerTypeText(const std::string& text);
+    void       drawerBackspace();
+    void       drawerClearQuery();
+    bool       drawerConfirmTop();
+    void       renderDrawerPass();
+    void       drawerStepAnim();
+    SP<Render::ITexture> drawerIconTexture(const Hyprexpo::Drawer::SApp& app, int px, double scale);
+    SP<Render::ITexture> drawerLabelTexture(const Hyprexpo::Drawer::SApp& app, double scale);
+
+  private:
     // Touch hold-to-drag wrapper (classic grid path): a touch down only
     // arms a press. Release before the hold timeout / drag threshold replays
     // the historical tap (select workspace). Holding past the timeout, or
@@ -137,6 +208,9 @@ class COverview final : public IOverviewSession {
         Vector2D            downGlobal{};
         Vector2D            lastGlobal{};
         bool                dragging = false;
+        int                 region   = 0; // EDrawerRegion, resolved at down
+        int                 appIndex = -1;
+        bool                pinConsumed = false;
         PHLMONITORREF       monitor;
         SP<CEventLoopTimer> holdTimer;
     };
@@ -203,6 +277,7 @@ class COverview final : public IOverviewSession {
     CHyprSignalListener          touchDownHook;
     CHyprSignalListener          touchUpHook;
     CHyprSignalListener          touchCancelHook;
+    CHyprSignalListener          mouseAxisHook;
     CHyprSignalListener          workspaceMoveHook;
 
     bool                         swipe             = false;

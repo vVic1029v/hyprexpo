@@ -17,12 +17,12 @@ VERSION_DEFINE := -DHYPREXPO_VERSION='"$(VERSION)"'
 
 CXXFLAGS = -shared -fPIC -g -std=c++2b -Wno-c++11-narrowing -Wno-narrowing
 LUA_PKG_CONFIG ?= $(shell if pkg-config --exists lua5.4; then printf 'lua5.4'; elif pkg-config --exists lua; then printf 'lua'; else printf 'lua5.4'; fi)
-PKG_CONFIG_DEPS = pixman-1 libdrm hyprland pangocairo libinput libudev wayland-server xkbcommon $(LUA_PKG_CONFIG)
-LINK_DEPS = pangocairo xkbcommon $(LUA_PKG_CONFIG)
+PKG_CONFIG_DEPS = pixman-1 libdrm hyprland pangocairo libinput libudev wayland-server xkbcommon gdk-pixbuf-2.0 $(LUA_PKG_CONFIG)
+LINK_DEPS = pangocairo xkbcommon gdk-pixbuf-2.0 glib-2.0 gobject-2.0 $(LUA_PKG_CONFIG)
 INCLUDES = $(shell pkg-config --cflags $(PKG_CONFIG_DEPS))
 LIBS = $(shell pkg-config --libs $(LINK_DEPS))
 
-SRC = src/main.cpp src/Dispatchers.cpp src/PluginConfig.cpp src/IOverviewSession.cpp src/Overview.cpp src/OverviewInteraction.cpp src/OverviewRender.cpp src/OverviewCapture.cpp src/ScrollingOverview.cpp src/ScrollingInputState.cpp src/ExpoGesture.cpp src/OverviewPassElement.cpp src/HyprexpoLogic.cpp src/ScrollingOverviewLogic.cpp src/ScrollingMutationTransaction.cpp src/ScrollingLayoutAdapter.cpp src/ScrollingDiagnostics.cpp
+SRC = src/main.cpp src/Dispatchers.cpp src/PluginConfig.cpp src/IOverviewSession.cpp src/Overview.cpp src/OverviewInteraction.cpp src/OverviewRender.cpp src/OverviewDrawer.cpp src/Drawer.cpp src/OverviewCapture.cpp src/ScrollingOverview.cpp src/ScrollingInputState.cpp src/ExpoGesture.cpp src/OverviewPassElement.cpp src/HyprexpoLogic.cpp src/ScrollingOverviewLogic.cpp src/ScrollingMutationTransaction.cpp src/ScrollingLayoutAdapter.cpp src/ScrollingDiagnostics.cpp
 HEADERS = src/globals.hpp src/Dispatchers.hpp src/PluginConfig.hpp src/HyprlandConfigCompat.hpp src/IOverviewSession.hpp src/Overview.hpp src/OverviewInternal.hpp src/OverviewCapture.hpp src/ScrollingOverview.hpp src/ScrollingInputState.hpp src/ScrollingRequestId.hpp src/ExpoGesture.hpp src/OverviewPassElement.hpp src/HyprexpoConfig.hpp src/HyprexpoLogic.hpp src/ScrollingOverviewLogic.hpp src/ScrollingMutationTransaction.hpp src/ScrollingLayoutAdapter.hpp src/ScrollingDiagnostics.hpp
 TARGET = hyprexpo.so
 TEST_TARGET = HyprexpoLogicTests
