@@ -1034,34 +1034,66 @@ Hyprexpo::STileLayout COverview::tileLayoutForIndex(int id, const Vector2D& tota
 }
 
 namespace {
-// Ribbon band fraction: workspace tiles live in the top slice only;
-// the search strip and app drawer own everything below it.
-double ribbonBandH(double totalH) {
-    return 0.34 * totalH;
+// Ribbon band: workspace tiles live in the top slice only; the search
+// strip and app drawer own everything below it. Tiles are deterministic
+// 16:10 slots (never stretched): width from column count, height derived,
+// row centered. Slots beyond `cols` do not exist (empty box, unhittable).
+double ribbonTileW(double W, int cols, double gap, double outer) {
+    if (cols < 1)
+        cols = 1;
+    return std::max(1.0, (W - 2.0 * outer - (double)(cols - 1) * gap) / (double)cols);
+}
+double ribbonTileH(double tileW) {
+    return tileW * 10.0 / 16.0;
+}
+double ribbonBandH(double W, double H, int cols, double gap, double outer) {
+    (void)H;
+    return ribbonTileH(ribbonTileW(W, cols, gap, outer)) + 2.0 * outer;
 }
 } // namespace
 
 double COverview::ribbonH() const {
     const auto MON = pMonitor.lock();
-    return MON ? ribbonBandH(MON->m_size.y) : 0.0;
+    if (!MON)
+        return 0.0;
+    const int cols = std::max(1, currentGridShape().cols);
+    return ribbonBandH(MON->m_size.x, MON->m_size.y, cols, (double)GAP_WIDTH, currentOuterInset());
 }
 
 CBox COverview::tileBoxForIndex(int id, const Vector2D& totalSize, double gap, double outerInset, bool centerPartialRows) const {
-    // Ribbon: workspace tiles live in the top band only (the search strip
-    // and app drawer own everything below). Every tile consumer — render,
+    // Ribbon: deterministic slots (see above). Every tile consumer — render,
     // hover, drag, labels, damage — flows through here and follows.
-    const Vector2D ribbon{totalSize.x, ribbonBandH(totalSize.y)};
-    const auto     layout = tileLayoutForIndex(id, ribbon, gap, outerInset, centerPartialRows);
-    return {layout.box.x, layout.box.y, layout.box.w, layout.box.h};
+    (void)centerPartialRows;
+    const int cols = std::max(1, currentGridShape().cols);
+    if (id < 0 || id >= cols)
+        return CBox{{0, 0}, {0, 0}};
+    const double tileW = ribbonTileW(totalSize.x, cols, gap, outerInset);
+    const double tileH = ribbonTileH(tileW);
+    const double rowW  = cols * tileW + (cols - 1) * gap;
+    const double x0    = (totalSize.x - rowW) / 2.0;
+    return CBox{{x0 + id * (tileW + gap), outerInset}, {tileW, tileH}};
 }
 
 int COverview::tileIndexAtPoint(const Vector2D& point, const Vector2D& totalSize, double gap, double outerInset, bool centerPartialRows) const {
-    if (point.x < 0 || point.y < 0 || point.x >= totalSize.x || point.y >= ribbonBandH(totalSize.y))
+    (void)centerPartialRows;
+    const int cols = std::max(1, currentGridShape().cols);
+    const double tileW = ribbonTileW(totalSize.x, cols, gap, outerInset);
+    const double tileH = ribbonTileH(tileW);
+    const double rowW  = cols * tileW + (cols - 1) * gap;
+    const double x0    = (totalSize.x - rowW) / 2.0;
+    const double y0    = outerInset;
+    const double lx    = point.x - x0;
+    const double ly    = point.y - y0;
+    if (lx < 0 || ly < 0 || ly >= tileH)
         return -1;
-    const Vector2D ribbon{totalSize.x, ribbonBandH(totalSize.y)};
-    const auto shape = currentGridShape();
-    const Hyprexpo::SSize total{std::max(0.0, ribbon.x - outerInset * 2.0), std::max(0.0, ribbon.y - outerInset * 2.0)};
-    return Hyprexpo::tileIndexAtPoint(point.x - outerInset, point.y - outerInset, (int)images.size(), shape, total, gap, centerPartialRows);
+    const int slot = (int)(lx / (tileW + gap));
+    if (slot < 0 || slot >= cols)
+        return -1;
+    if (lx - slot * (tileW + gap) > tileW)
+        return -1;
+    if (slot >= (int)images.size())
+        return -1;
+    return slot;
 }
 
 Vector2D COverview::tilePosForID(int id, const Vector2D& totalSize, double gap, double outerInset, bool centerPartialRows) const {
@@ -1329,7 +1361,7 @@ COverview::COverview(PHLWORKSPACE startedOn_, PHLMONITOR monitor_, bool swipe_, 
             .blockSurfaceFeedback = true,
         }, image.fb);
 
-        image.box = tileBoxForIndex((int)i, pMonitor->m_size, GAP_WIDTH, 0.0, true);
+        image.box = tileBoxForIndex((int)i, pMonitor->m_size, GAP_WIDTH, currentOuterInset(), true);
     }
     PMONITOR->m_activeWorkspace        = startedOn;
     startedOn->m_visible               = true;

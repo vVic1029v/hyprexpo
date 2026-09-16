@@ -85,15 +85,22 @@ double COverview::searchH() const {
 }
 
 double COverview::searchTop() const {
+    // Docked: strip sits just above the single bottom row. Fitted: top.
     const auto MON = pMonitor.lock();
     const double H = MON ? MON->m_size.y : 0.0;
-    const double dockedY = ribbonH() + 24.0;
+    const double dockedY = H - 16.0 - drawerRowH() - 12.0 - searchH();
     const double fittedY = 24.0;
     return dockedY + (fittedY - dockedY) * smooth01(drawer.anim);
 }
 
 double COverview::drawerTop() const {
-    return searchTop() + searchH() + 16.0;
+    // Docked: one pinned row pinned to the bottom edge (rest of the grid
+    // lives below the screen and scrolls up into view when fitted).
+    const auto MON = pMonitor.lock();
+    const double H = MON ? MON->m_size.y : 0.0;
+    const double dockedY = H - 16.0 - drawerRowH();
+    const double fittedY = 24.0 + searchH() + 16.0;
+    return dockedY + (fittedY - dockedY) * smooth01(drawer.anim);
 }
 
 COverview::ERegion COverview::regionAtPoint(const Vector2D& local) const {
