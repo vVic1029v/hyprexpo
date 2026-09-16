@@ -125,9 +125,36 @@ class COverview final : public IOverviewSession {
     bool       moveFocus(int dx, int dy);
     int        tileForWorkspaceID(int wsid) const;
     int        tileForVisibleIndex(int vIdx) const;
+    // Touch hold-to-drag wrapper (classic grid path): a touch down only
+    // arms a press. Release before the hold timeout / drag threshold replays
+    // the historical tap (select workspace). Holding past the timeout, or
+    // moving past the threshold, engages the same window-drag machinery the
+    // mouse path uses, so touch can move windows between workspaces.
+    // Hold timeout and drag threshold mirror the mouse feel (350ms / 12px).
+    struct STouchPress {
+        bool                active   = false;
+        int32_t             touchID  = -1;
+        Vector2D            downGlobal{};
+        Vector2D            lastGlobal{};
+        bool                dragging = false;
+        PHLMONITORREF       monitor;
+        SP<CEventLoopTimer> holdTimer;
+    };
+    STouchPress touchPress;
+
+    static COverview* touchOwner(int32_t touchID);
+    void touchPressDown(int32_t touchID, const Vector2D& global, const PHLMONITOR& monitor);
+    void touchMotionEvent(int32_t touchID, const Vector2D& pos);
+    void touchPressMotion(int32_t touchID, const Vector2D& global);
+    void touchPressUp(int32_t touchID);
+    void touchPressCancel(int32_t touchID);
+    void cancelTouchPress();
+    void engageTouchDrag();
     void       beginWindowDrag();
+    void       beginWindowDragAt(const Vector2D& global);
     bool       finishWindowDrag();
     void       updateWindowDrag();
+    void       updateWindowDragAt(const Vector2D& global);
     void       redrawDraggedWorkspace(int64_t workspaceID);
     void       queueRedrawID(int id);
     void       flushQueuedRedraws();
@@ -174,6 +201,8 @@ class COverview final : public IOverviewSession {
     CHyprSignalListener          mouseButtonHook;
     CHyprSignalListener          touchMoveHook;
     CHyprSignalListener          touchDownHook;
+    CHyprSignalListener          touchUpHook;
+    CHyprSignalListener          touchCancelHook;
     CHyprSignalListener          workspaceMoveHook;
 
     bool                         swipe             = false;
