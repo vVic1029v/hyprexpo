@@ -1361,7 +1361,7 @@ COverview::COverview(PHLWORKSPACE startedOn_, PHLMONITOR monitor_, bool swipe_, 
             .blockSurfaceFeedback = true,
         }, image.fb);
 
-        image.box = tileBoxForIndex((int)i, pMonitor->m_size, GAP_WIDTH, currentOuterInset(), true);
+        image.box = tileBoxForIndex((int)i, pMonitor->m_size, GAP_WIDTH, 0.0, true); // stock: literal inset; currentOuterInset() is unsafe here (size anim not created yet -> null deref)
     }
     PMONITOR->m_activeWorkspace        = startedOn;
     startedOn->m_visible               = true;
