@@ -1033,14 +1033,34 @@ Hyprexpo::STileLayout COverview::tileLayoutForIndex(int id, const Vector2D& tota
     return layout;
 }
 
+namespace {
+// Ribbon band fraction: workspace tiles live in the top slice only;
+// the search strip and app drawer own everything below it.
+double ribbonBandH(double totalH) {
+    return 0.34 * totalH;
+}
+} // namespace
+
+double COverview::ribbonH() const {
+    const auto MON = pMonitor.lock();
+    return MON ? ribbonBandH(MON->m_size.y) : 0.0;
+}
+
 CBox COverview::tileBoxForIndex(int id, const Vector2D& totalSize, double gap, double outerInset, bool centerPartialRows) const {
-    const auto layout = tileLayoutForIndex(id, totalSize, gap, outerInset, centerPartialRows);
+    // Ribbon: workspace tiles live in the top band only (the search strip
+    // and app drawer own everything below). Every tile consumer — render,
+    // hover, drag, labels, damage — flows through here and follows.
+    const Vector2D ribbon{totalSize.x, ribbonBandH(totalSize.y)};
+    const auto     layout = tileLayoutForIndex(id, ribbon, gap, outerInset, centerPartialRows);
     return {layout.box.x, layout.box.y, layout.box.w, layout.box.h};
 }
 
 int COverview::tileIndexAtPoint(const Vector2D& point, const Vector2D& totalSize, double gap, double outerInset, bool centerPartialRows) const {
+    if (point.x < 0 || point.y < 0 || point.x >= totalSize.x || point.y >= ribbonBandH(totalSize.y))
+        return -1;
+    const Vector2D ribbon{totalSize.x, ribbonBandH(totalSize.y)};
     const auto shape = currentGridShape();
-    const Hyprexpo::SSize total{std::max(0.0, totalSize.x - outerInset * 2.0), std::max(0.0, totalSize.y - outerInset * 2.0)};
+    const Hyprexpo::SSize total{std::max(0.0, ribbon.x - outerInset * 2.0), std::max(0.0, ribbon.y - outerInset * 2.0)};
     return Hyprexpo::tileIndexAtPoint(point.x - outerInset, point.y - outerInset, (int)images.size(), shape, total, gap, centerPartialRows);
 }
 
@@ -1065,6 +1085,7 @@ COverview::~COverview() {
     }
     Render::GL::g_pHyprOpenGL->makeEGLCurrent();
     images.clear(); // otherwise we get a vram leak
+    drawerClearCaches();
     Pointer::Cursor::overrideController->unsetOverride(Pointer::Cursor::CURSOR_OVERRIDE_UNKNOWN);
     ensureOverviewCursorVisible(false, true);
     if (const auto MON = pMonitor.lock()) {
@@ -1336,6 +1357,8 @@ COverview::COverview(PHLWORKSPACE startedOn_, PHLMONITOR monitor_, bool swipe_, 
     updateHoveredFromMouse();
     kbFocusID = openedID;
 
+    drawerRescan();
+
     auto onCursorMove = [this](Event::SCallbackInfo& info) {
         if (closing)
             return;
@@ -1348,7 +1371,15 @@ COverview::COverview(PHLWORKSPACE startedOn_, PHLMONITOR monitor_, bool swipe_, 
             const auto MON = OV->monitor();
             if (!MON || OV->closing)
                 continue;
-            OV->lastMousePosLocal = GLOBAL - MON->m_position;
+            const Vector2D newLocal = GLOBAL - MON->m_position;
+            if (OV->drawer.mouseArmed) {
+                const auto dd = newLocal - OV->lastMousePosLocal;
+                if (std::hypot(dd.x, dd.y) >= 12.0)
+                    OV->drawer.mouseMoved = true;
+                if (OV->drawer.mouseMoved)
+                    OV->drawerScrollBy(dd.y);
+            }
+            OV->lastMousePosLocal = newLocal;
             OV->updateHoveredFromMouse();
         }
 
@@ -1382,6 +1413,37 @@ COverview::COverview(PHLWORKSPACE startedOn_, PHLMONITOR monitor_, bool swipe_, 
         if (TARGET && TARGET->size->getPercent() < 0.05f) {
             TARGET->close(false);
             return;
+        }
+
+        // Drawer region first: taps launch/focus, right-click pins, presses
+        // arm for scroll — the window-drag path below must not see them.
+        if (TARGET) {
+            if (const auto TMON = TARGET->monitor()) {
+                const auto local  = GLOBAL - TMON->m_position;
+                const auto region = TARGET->regionAtPoint(local);
+                if (region == COverview::ERegion::Search) {
+                    TARGET->drawer.searchFocused = true;
+                    TARGET->damage();
+                    return;
+                }
+                if (region == COverview::ERegion::Grid) {
+                    if (event.state == WL_POINTER_BUTTON_STATE_PRESSED) {
+                        if (event.button == 0x111) { // right button: pin/unpin
+                            TARGET->drawerTap(local, true);
+                        } else {
+                            TARGET->drawer.mouseArmed = true;
+                            TARGET->drawer.mouseApp = TARGET->drawerAppAt(local);
+                            TARGET->drawer.mouseDown = local;
+                            TARGET->drawer.mouseMoved = false;
+                        }
+                    } else if (TARGET->drawer.mouseArmed) {
+                        TARGET->drawer.mouseArmed = false;
+                        if (!TARGET->drawer.mouseMoved)
+                            TARGET->drawerTap(local, false);
+                    }
+                    return;
+                }
+            }
         }
 
         if (event.state == WL_POINTER_BUTTON_STATE_PRESSED) {
@@ -1444,6 +1506,24 @@ COverview::COverview(PHLWORKSPACE startedOn_, PHLMONITOR monitor_, bool swipe_, 
         if (auto* const OWNER = COverview::touchOwner(event.touchID)) {
             info.cancelled = true;
             OWNER->touchPressCancel(event.touchID);
+        }
+    });
+    mouseAxisHook = Event::bus()->m_events.input.mouse.axis.listen([](const IPointer::SAxisEvent& event, Event::SCallbackInfo& info) {
+        // Wheel / touchpad scroll over the drawer scrolls it (or snaps it
+        // docked<->fitted). Everywhere else the event falls through untouched.
+        const Vector2D GLOBAL = g_pInputManager->getMouseCoordsInternal();
+        for (const auto& session : g_overviews) {
+            auto* const OV = dynamic_cast<COverview*>(session.get());
+            if (!OV || OV->closing)
+                continue;
+            const auto MON = OV->monitor();
+            if (!MON)
+                continue;
+            if (OV->regionAtPoint(GLOBAL - MON->m_position) != COverview::ERegion::Grid)
+                continue;
+            OV->drawerScrollBy(event.delta * 4.0);
+            info.cancelled = true;
+            return;
         }
     });
     workspaceMoveHook = Event::bus()->m_events.window.moveToWorkspace.listen([this](PHLWINDOW window, PHLWORKSPACE workspace) { onWindowMoveToWorkspace(window, workspace); });

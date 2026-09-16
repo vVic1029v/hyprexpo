@@ -103,4 +103,9 @@ inline constexpr const char* SELECTION_LABEL_POSITION_DEFAULT  = "top-right";
 inline constexpr int         SELECTION_LABEL_OFFSET_X_DEFAULT  = 6;
 inline constexpr int         SELECTION_LABEL_OFFSET_Y_DEFAULT  = 6;
 inline constexpr unsigned    SELECTION_LABEL_COLOR_DEFAULT     = 0xFFFFCC66;
+inline constexpr int         DRAWER_ENABLE_DEFAULT           = 1;
+inline constexpr int         DRAWER_COLUMNS_DEFAULT          = 5;
+inline constexpr int         DRAWER_SEARCH_H_DEFAULT         = 64;
+inline constexpr int         DRAWER_EXPAND_PX_DEFAULT        = 60;
+inline constexpr int         DRAWER_ICON_PX_DEFAULT          = 72;
 }

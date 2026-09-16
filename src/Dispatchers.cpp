@@ -1,6 +1,7 @@
 #define WLR_USE_UNSTABLE
 
 #include "Dispatchers.hpp"
+#include "Overview.hpp"
 
 #include "ExpoGesture.hpp"
 #include "HyprexpoConfig.hpp"
@@ -46,6 +47,7 @@ static SDispatchResult onKbSelectNumberDispatcher(std::string arg);
 static SDispatchResult onKbSelectTokenDispatcher(std::string arg);
 static SDispatchResult onKbSelectIndexDispatcher(std::string arg);
 static SDispatchResult onMovePreviewWindowDispatcher(std::string arg);
+static SDispatchResult onDrawerDispatcher(std::string arg);
 static SDispatchResult onScrollingDebugDispatcher(std::string arg);
 static SDispatchResult onScrollingInputTestDispatcher(std::string arg);
 static SDispatchResult onScrollingMutationTestDispatcher(std::string arg);
@@ -424,6 +426,10 @@ static int luaExpo(lua_State* L) {
     return luaDispatchResult(L, "hyprexpo.expo", onExpoDispatcher(luaStringArg(L, 1, "hyprexpo.expo", "toggle")));
 }
 
+static int luaDrawer(lua_State* L) {
+    return luaDispatchResult(L, "hyprexpo.drawer", onDrawerDispatcher(luaStringArg(L, 1, "hyprexpo.drawer", "toggle")));
+}
+
 static int luaKbFocus(lua_State* L) {
     return luaDispatchResult(L, "hyprexpo.kb_focus", onKbFocusDispatcher(luaStringArg(L, 1, "hyprexpo.kb_focus")));
 }
@@ -608,6 +614,20 @@ static SDispatchResult onKbConfirmDispatcher(std::string arg) {
     return {};
 }
 
+static SDispatchResult onDrawerDispatcher(std::string arg) {
+    auto* const OV = dynamic_cast<COverview*>(activeOverview());
+    if (!OV)
+        return {};
+    arg = trimString(arg);
+    if (arg == "expand")
+        OV->drawerSetFitted(true);
+    else if (arg == "collapse")
+        OV->drawerSetFitted(false);
+    else
+        OV->drawerSetFitted(!OV->drawer.fitted);
+    return {};
+}
+
 static SDispatchResult onKbSelectNumberDispatcher(std::string arg) {
     auto* const OV = activeOverview();
     if (!OV)
@@ -764,10 +784,12 @@ void registerHyprexpoDispatchers() {
     HyprlandAPI::addDispatcherV2(PHANDLE, "hyprexpo:kb_selecti", onKbSelectIndexDispatcher);
     HyprlandAPI::addDispatcherV2(PHANDLE, "hyprexpo:move_window", onMovePreviewWindowDispatcher);
     HyprlandAPI::addDispatcherV2(PHANDLE, "hyprexpo:scrolling_debug", onScrollingDebugDispatcher);
+    HyprlandAPI::addDispatcherV2(PHANDLE, "hyprexpo:drawer", onDrawerDispatcher);
     HyprlandAPI::addDispatcherV2(PHANDLE, "hyprexpo:scrolling_input_test", onScrollingInputTestDispatcher);
     HyprlandAPI::addDispatcherV2(PHANDLE, "hyprexpo:scrolling_mutation_test", onScrollingMutationTestDispatcher);
 
     HyprlandAPI::addLuaFunction(PHANDLE, "hyprexpo", "expo", luaExpo);
+    HyprlandAPI::addLuaFunction(PHANDLE, "hyprexpo", "drawer", luaDrawer);
     HyprlandAPI::addLuaFunction(PHANDLE, "hyprexpo", "kb_focus", luaKbFocus);
     HyprlandAPI::addLuaFunction(PHANDLE, "hyprexpo", "kb_confirm", luaKbConfirm);
     HyprlandAPI::addLuaFunction(PHANDLE, "hyprexpo", "kb_selectn", luaKbSelectNumber);

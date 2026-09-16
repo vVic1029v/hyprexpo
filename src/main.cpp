@@ -8,6 +8,7 @@
 #include <hyprland/src/event/EventBus.hpp>
 
 #include "Dispatchers.hpp"
+#include "Drawer.hpp"
 #include "globals.hpp"
 #include "IOverviewSession.hpp"
 #include "OverviewCapture.hpp"
@@ -126,6 +127,12 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
     });
 
     static auto PKEY = Event::bus()->m_events.input.keyboard.key.listen([](IKeyboard::SKeyEvent event, Event::SCallbackInfo& info) {
+        // Drawer search eats printable/editing keys while focused (digits
+        // included: they filter instead of workspace-jumping).
+        if (Hyprexpo::Drawer::drawerSearchKey(event)) {
+            info.cancelled = true;
+            return;
+        }
         if (shouldCancelOverview(event)) {
             info.cancelled = true;
             closeOverviews(false);
