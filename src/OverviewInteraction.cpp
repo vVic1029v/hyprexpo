@@ -179,6 +179,10 @@ PHLWINDOW COverview::windowAtTilePoint(int id, const Vector2D& localPoint) const
 }
 
 void COverview::beginWindowDrag() {
+    beginWindowDragAt(g_pInputManager->getMouseCoordsInternal());
+}
+
+void COverview::beginWindowDragAt(const Vector2D& global) {
     if (g_overviewDrag.state.active)
         return;
 
@@ -191,7 +195,7 @@ void COverview::beginWindowDrag() {
         tiles.insert(tiles.end(), overviewTiles.begin(), overviewTiles.end());
     }
 
-    const Vector2D GLOBAL = g_pInputManager->getMouseCoordsInternal();
+    const Vector2D GLOBAL = global;
     const auto     HIT    = Hyprexpo::hitTestGlobalTile({GLOBAL.x, GLOBAL.y}, tiles);
     const auto     MON    = pMonitor.lock();
     if (!HIT || !MON || HIT->overviewKey != overviewMonitorKey(MON))
@@ -224,11 +228,15 @@ void COverview::beginWindowDrag() {
 }
 
 void COverview::updateWindowDrag() {
+    updateWindowDragAt(g_pInputManager->getMouseCoordsInternal());
+}
+
+void COverview::updateWindowDragAt(const Vector2D& global) {
     const auto MON = pMonitor.lock();
     if (!MON || !g_overviewDrag.state.active || g_overviewDrag.state.sourceMonitorKey != overviewMonitorKey(MON))
         return;
 
-    const Vector2D GLOBAL = g_pInputManager->getMouseCoordsInternal();
+    const Vector2D GLOBAL = global;
     g_overviewDrag.pointerGlobal = GLOBAL;
     const auto dx = GLOBAL.x - g_overviewDrag.pressGlobal.x;
     const auto dy = GLOBAL.y - g_overviewDrag.pressGlobal.y;
@@ -337,6 +345,143 @@ bool COverview::finishWindowDrag() {
 
     resetOverviewDrag(Hyprexpo::EOverviewDragEventType::Release);
     return CONSUMED;
+}
+
+// Touch hold-to-drag wrapper: mirrors the mouse press/move/release flow,
+// but a touch down only arms a press — selection happens on release (tap),
+// while hold timeout or motion engages the window drag.
+static constexpr uint32_t TOUCH_HOLD_MS   = 350;
+static constexpr double   TOUCH_DRAG_PX   = 12.0; // same threshold as mouse drag
+
+COverview* COverview::touchOwner(int32_t touchID) {
+    for (const auto& session : g_overviews) {
+        auto* const OV = dynamic_cast<COverview*>(session.get());
+        if (OV && !OV->closing && OV->touchPress.active && OV->touchPress.touchID == touchID)
+            return OV;
+    }
+    return nullptr;
+}
+
+void COverview::cancelTouchPress() {
+    touchPress.holdTimer.reset();
+    touchPress.active   = false;
+    touchPress.dragging = false;
+    touchPress.touchID  = -1;
+    touchPress.monitor.reset();
+}
+
+void COverview::touchPressDown(int32_t touchID, const Vector2D& global, const PHLMONITOR& monitor) {
+    if (closing || !monitor)
+        return;
+    cancelTouchPress();
+    touchPress.active      = true;
+    touchPress.touchID     = touchID;
+    touchPress.downGlobal  = global;
+    touchPress.lastGlobal  = global;
+    touchPress.dragging    = false;
+    touchPress.monitor     = monitor;
+    // hover feedback under the finger while undecided
+    lastMousePosLocal = global - monitor->m_position;
+    updateHoveredFromMouse();
+    // hold-to-drag: engage the window move if still down after the timeout
+    const uint64_t KEY = overviewMonitorKey(monitor);
+    const uint64_t GEN = m_sessionGeneration;
+    touchPress.holdTimer  = makeShared<CEventLoopTimer>(
+        std::chrono::milliseconds(TOUCH_HOLD_MS),
+        [KEY, GEN, touchID](SP<CEventLoopTimer> self, void*) {
+            self->cancel();
+            auto* const OV = dynamic_cast<COverview*>(overviewForSession(KEY, GEN));
+            if (!OV || OV->touchPress.holdTimer.get() != self.get())
+                return;
+            if (!OV->touchPress.active || OV->touchPress.touchID != touchID || OV->touchPress.dragging || OV->closing)
+                return;
+            OV->engageTouchDrag();
+        },
+        nullptr);
+    g_pEventLoopManager->addTimer(touchPress.holdTimer);
+}
+
+void COverview::touchMotionEvent(int32_t touchID, const Vector2D& pos) {
+    auto* const OWNER = touchOwner(touchID);
+    if (!OWNER)
+        return;
+    const auto MON = OWNER->touchPress.monitor.lock();
+    if (!MON)
+        return;
+    OWNER->touchPressMotion(touchID, MON->m_position + pos * MON->m_size);
+}
+
+void COverview::touchPressMotion(int32_t touchID, const Vector2D& global) {
+    if (!touchPress.active || touchPress.touchID != touchID || closing)
+        return;
+    touchPress.lastGlobal = global;
+    if (!touchPress.dragging) {
+        // fast flicks engage on distance alone, like the mouse path
+        const auto d = global - touchPress.downGlobal;
+        if (std::hypot(d.x, d.y) >= TOUCH_DRAG_PX)
+            engageTouchDrag();
+    }
+    if (touchPress.dragging) {
+        updateWindowDragAt(global);
+    } else {
+        const auto MON = pMonitor.lock();
+        if (!MON)
+            return;
+        lastMousePosLocal = global - MON->m_position;
+        updateHoveredFromMouse();
+    }
+}
+
+void COverview::engageTouchDrag() {
+    if (!touchPress.active || touchPress.dragging || closing)
+        return;
+    static auto* const* PDRAGDROPENABLE = (Hyprlang::INT* const*)HyprlandAPI::getConfigValue(PHANDLE, "plugin:hyprexpo:drag_drop_enable")->getDataStaticPtr();
+    if (!**PDRAGDROPENABLE)
+        return;
+    beginWindowDragAt(touchPress.lastGlobal);
+    touchPress.dragging = g_overviewDrag.state.active;
+    if (touchPress.dragging) {
+        touchPress.holdTimer.reset();
+        damage();
+    }
+}
+
+void COverview::touchPressUp(int32_t touchID) {
+    auto* const OWNER = touchOwner(touchID);
+    if (!OWNER)
+        return;
+    const bool        wasDragging = OWNER->touchPress.dragging;
+    const Vector2D    upGlobal    = OWNER->touchPress.lastGlobal;
+    const PHLMONITOR  mon         = OWNER->touchPress.monitor.lock();
+    OWNER->cancelTouchPress();
+    if (OWNER->closing)
+        return;
+    if (wasDragging) {
+        // drop: move the window (or no-op) and never fall through to select
+        if (auto* const SOURCE = gridOverviewForMonitorKey(g_overviewDrag.state.sourceMonitorKey))
+            SOURCE->finishWindowDrag();
+        return;
+    }
+    // tap: historical behavior, evaluated at the release point
+    if (!mon)
+        return;
+    if (OWNER->size->getPercent() < 0.05f) {
+        OWNER->close(false);
+        return;
+    }
+    OWNER->lastMousePosLocal = upGlobal - mon->m_position;
+    OWNER->updateHoveredFromMouse();
+    if (OWNER->selectHoveredWorkspace())
+        closeOverviewsSelecting(OWNER);
+}
+
+void COverview::touchPressCancel(int32_t touchID) {
+    auto* const OWNER = touchOwner(touchID);
+    if (!OWNER)
+        return;
+    if (OWNER->touchPress.dragging)
+        resetOverviewDrag(Hyprexpo::EOverviewDragEventType::Cancel);
+    OWNER->cancelTouchPress();
 }
 
 bool COverview::moveWindowBetweenVisibleIndices(size_t sourceIndex, size_t targetIndex, const PHLWINDOW& requestedWindow) {

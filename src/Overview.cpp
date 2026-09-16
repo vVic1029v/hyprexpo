@@ -1400,8 +1400,12 @@ COverview::COverview(PHLWORKSPACE startedOn_, PHLMONITOR monitor_, bool swipe_, 
             closeOverviewsSelecting(TARGET);
     };
 
-    auto onTouchSelect = [this](const ITouch::SDownEvent& event, Event::SCallbackInfo& info) {
-        if (closing || info.cancelled)
+    // Touch hold-to-drag wrapper (classic grid path): a touch down only arms
+    // a press on the session under the finger. Releasing before the hold
+    // timeout replays the historical tap below; holding past it (or moving
+    // past the drag threshold) engages the window-drag machinery instead.
+    auto onTouchDown = [](const ITouch::SDownEvent& event, Event::SCallbackInfo& info) {
+        if (info.cancelled)
             return;
 
         auto MON = event.device && !event.device->m_boundOutput.empty() ? State::monitorState()->query().name(event.device->m_boundOutput).run() : PHLMONITOR{};
@@ -1412,16 +1416,16 @@ COverview::COverview(PHLWORKSPACE startedOn_, PHLMONITOR monitor_, bool swipe_, 
         if (!TARGET || TARGET->closing)
             return;
 
-        TARGET->lastMousePosLocal = event.pos * MON->m_size;
-        TARGET->updateHoveredFromMouse();
-
         info.cancelled = true;
-        if (TARGET->selectHoveredWorkspace())
-            closeOverviewsSelecting(TARGET);
+        TARGET->touchPressDown(event.touchID, MON->m_position + event.pos * MON->m_size, MON);
     };
 
     mouseMoveHook = Event::bus()->m_events.input.mouse.move.listen([onCursorMove](const Vector2D&, Event::SCallbackInfo& info) { onCursorMove(info); });
     touchMoveHook = Event::bus()->m_events.input.touch.motion.listen([onCursorMove](const ITouch::SMotionEvent& event, Event::SCallbackInfo& info) {
+        if (auto* const OWNER = COverview::touchOwner(event.touchID)) {
+            OWNER->touchMotionEvent(event.touchID, event.pos);
+            return;
+        }
         for (const auto& session : g_overviews) {
             if (session && session->ownsTouchInput(event.touchID))
                 return;
@@ -1429,7 +1433,19 @@ COverview::COverview(PHLWORKSPACE startedOn_, PHLMONITOR monitor_, bool swipe_, 
         onCursorMove(info);
     });
     mouseButtonHook = Event::bus()->m_events.input.mouse.button.listen([onCursorSelect](const IPointer::SButtonEvent& event, Event::SCallbackInfo& info) { onCursorSelect(event, info); });
-    touchDownHook = Event::bus()->m_events.input.touch.down.listen([onTouchSelect](const ITouch::SDownEvent& event, Event::SCallbackInfo& info) { onTouchSelect(event, info); });
+    touchDownHook = Event::bus()->m_events.input.touch.down.listen([onTouchDown](const ITouch::SDownEvent& event, Event::SCallbackInfo& info) { onTouchDown(event, info); });
+    touchUpHook = Event::bus()->m_events.input.touch.up.listen([](const ITouch::SUpEvent& event, Event::SCallbackInfo& info) {
+        if (auto* const OWNER = COverview::touchOwner(event.touchID)) {
+            info.cancelled = true;
+            OWNER->touchPressUp(event.touchID);
+        }
+    });
+    touchCancelHook = Event::bus()->m_events.input.touch.cancel.listen([](const ITouch::SCancelEvent& event, Event::SCallbackInfo& info) {
+        if (auto* const OWNER = COverview::touchOwner(event.touchID)) {
+            info.cancelled = true;
+            OWNER->touchPressCancel(event.touchID);
+        }
+    });
     workspaceMoveHook = Event::bus()->m_events.window.moveToWorkspace.listen([this](PHLWINDOW window, PHLWORKSPACE workspace) { onWindowMoveToWorkspace(window, workspace); });
 
     enterSubmapIfEnabled();
