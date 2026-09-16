@@ -163,7 +163,6 @@ class COverview final : public IOverviewSession {
     // Ribbon geometry: workspace tiles live in the top band only. All tile
     // math flows through tileBoxForIndex/tileIndexAtPoint, so every consumer
     // (render, hover, drag, labels, damage) follows automatically.
-    static double ribbonBandH(double totalH) { return 0.34 * totalH; }
     double     ribbonH() const;
     double     searchH() const;
     double     searchTop() const;   // y where the search strip starts
