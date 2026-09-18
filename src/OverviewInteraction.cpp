@@ -351,9 +351,10 @@ bool COverview::finishWindowDrag() {
 
 // Touch hold-to-drag wrapper: mirrors the mouse press/move/release flow,
 // but a touch down only arms a press — selection happens on release (tap),
-// while hold timeout or motion engages the window drag.
+// a horizontal swipe pans, and only a *still* hold picks a window up.
 static constexpr uint32_t TOUCH_HOLD_MS   = 350;
 static constexpr double   TOUCH_DRAG_PX   = 12.0; // same threshold as mouse drag
+static constexpr double   HOLD_STILL_PX   = 8.0;  // hold must start still: drift voids pickup
 
 COverview* COverview::touchOwner(int32_t touchID) {
     for (const auto& session : g_overviews) {
@@ -368,10 +369,10 @@ void COverview::cancelTouchPress() {
     touchPress.holdTimer.reset();
     touchPress.active      = false;
     touchPress.dragging    = false;
+    touchPress.ribbonPanning = false;
     touchPress.touchID     = -1;
     touchPress.region      = (int)ERegion::None;
     touchPress.appIndex    = -1;
-    touchPress.pinConsumed = false;
     touchPress.monitor.reset();
 }
 
@@ -387,7 +388,8 @@ void COverview::touchPressDown(int32_t touchID, const Vector2D& global, const PH
     touchPress.monitor     = monitor;
     touchPress.region      = (int)regionAtPoint(global - monitor->m_position);
     touchPress.appIndex    = -1;
-    touchPress.pinConsumed = false;
+    if (touchPress.region == (int)ERegion::Grid)
+        drawerPullBegin();
     // hover feedback under the finger while undecided
     lastMousePosLocal = global - monitor->m_position;
     updateHoveredFromMouse();
@@ -401,7 +403,14 @@ void COverview::touchPressDown(int32_t touchID, const Vector2D& global, const PH
             auto* const OV = dynamic_cast<COverview*>(overviewForSession(KEY, GEN));
             if (!OV || OV->touchPress.holdTimer.get() != self.get())
                 return;
-            if (!OV->touchPress.active || OV->touchPress.touchID != touchID || OV->touchPress.dragging || OV->closing)
+            if (!OV->touchPress.active || OV->touchPress.touchID != touchID || OV->touchPress.dragging || OV->touchPress.ribbonPanning ||
+                OV->closing)
+                return;
+            // A hold picks up only a still finger: drift means the press
+            // already became a pan/scroll, so picking up now would grab a
+            // window out from under a moving gesture at random.
+            const auto drift = OV->touchPress.lastGlobal - OV->touchPress.downGlobal;
+            if (std::hypot(drift.x, drift.y) >= HOLD_STILL_PX)
                 return;
             OV->engageTouchDrag();
         },
@@ -422,11 +431,14 @@ void COverview::touchMotionEvent(int32_t touchID, const Vector2D& pos) {
 void COverview::touchPressMotion(int32_t touchID, const Vector2D& global) {
     if (!touchPress.active || touchPress.touchID != touchID || closing)
         return;
+    const double dx = global.x - touchPress.lastGlobal.x;
     const double dy = global.y - touchPress.lastGlobal.y;
     touchPress.lastGlobal = global;
     if (touchPress.region == (int)ERegion::Grid) {
-        // vertical finger motion scrolls/expands/collapses the drawer
-        drawerScrollBy(dy);
+        // Vertical finger motion pulls the drawer (release decides
+        // open vs snap-back). Close permission was latched at press
+        // from the scroll position; pass only the displacement.
+        drawerPullBy(dy);
         const auto MON = touchPress.monitor.lock();
         if (MON) {
             const int idx = drawerAppAt(global - MON->m_position);
@@ -440,10 +452,27 @@ void COverview::touchPressMotion(int32_t touchID, const Vector2D& global) {
     if (touchPress.region != (int)ERegion::Ribbon)
         return; // Search: hold still, tap focuses on release
     if (!touchPress.dragging) {
-        // fast flicks engage on distance alone, like the mouse path
-        const auto d = global - touchPress.downGlobal;
-        if (std::hypot(d.x, d.y) >= TOUCH_DRAG_PX)
-            engageTouchDrag();
+        // One rule, no races: a horizontal-dominant swipe pans the strip
+        // and locks the press into panning. Anything else stays undecided
+        // (hover follows) until the hold timer picks the card up — a flick
+        // never grabs a window by itself, so the same gesture can't
+        // sometimes pan and sometimes drag.
+        if (!touchPress.ribbonPanning) {
+            const auto d = global - touchPress.downGlobal;
+            if (std::abs(d.x) > std::abs(d.y) && std::abs(d.x) >= TOUCH_DRAG_PX) {
+                touchPress.ribbonPanning = true;
+                touchPress.holdTimer.reset();
+            }
+        }
+        if (touchPress.ribbonPanning) {
+            ribbonPanBy(dx);
+            const auto MON = pMonitor.lock();
+            if (!MON)
+                return;
+            lastMousePosLocal = global - MON->m_position;
+            updateHoveredFromMouse();
+            return;
+        }
     }
     if (touchPress.dragging) {
         updateWindowDragAt(global);
@@ -457,18 +486,11 @@ void COverview::touchPressMotion(int32_t touchID, const Vector2D& global) {
 }
 
 void COverview::engageTouchDrag() {
-    if (!touchPress.active || touchPress.dragging || closing)
+    if (!touchPress.active || touchPress.dragging || touchPress.ribbonPanning || closing)
         return;
     if (touchPress.region == (int)ERegion::Grid) {
-        // long-press an app tile pins/unpins it instead of dragging
-        const auto MON = touchPress.monitor.lock();
-        if (MON) {
-            const int idx = drawerAppAt(touchPress.lastGlobal - MON->m_position);
-            if (idx >= 0) {
-                drawerTogglePin((size_t)idx);
-                touchPress.pinConsumed = true;
-            }
-        }
+        // No hold action on app tiles: the grid order stays locked, so a
+        // hold is just the start of a pull (or a tap on release).
         touchPress.holdTimer.reset();
         return;
     }
@@ -490,7 +512,7 @@ void COverview::touchPressUp(int32_t touchID) {
     if (!OWNER)
         return;
     const bool        wasDragging = OWNER->touchPress.dragging;
-    const bool        wasPin      = OWNER->touchPress.pinConsumed;
+    const bool        wasPanning  = OWNER->touchPress.ribbonPanning;
     const int         region      = OWNER->touchPress.region;
     const Vector2D    upGlobal    = OWNER->touchPress.lastGlobal;
     const Vector2D    downGlobal  = OWNER->touchPress.downGlobal;
@@ -500,12 +522,11 @@ void COverview::touchPressUp(int32_t touchID) {
         return;
     const Vector2D upLocal = upGlobal - mon->m_position;
     if (region == (int)COverview::ERegion::Grid) {
-        if (wasPin)
-            return; // pin toggled on hold; release is a no-op
+        OWNER->drawerDragEnd();
         const auto md = upGlobal - downGlobal;
         if (std::hypot(md.x, md.y) >= 12.0)
-            return; // was a scroll, not a tap
-        OWNER->drawerTap(upLocal, false);
+            return; // was a pull, not a tap
+        OWNER->drawerTap(upLocal);
         return;
     }
     if (region == (int)COverview::ERegion::Search) {
@@ -513,11 +534,21 @@ void COverview::touchPressUp(int32_t touchID) {
         OWNER->damage();
         return;
     }
+    if (wasPanning)
+        return; // ribbon pan: release commits nothing, never selects
     if (wasDragging) {
         // drop: move the window (or no-op) and never fall through to select
         if (auto* const SOURCE = gridOverviewForMonitorKey(g_overviewDrag.state.sourceMonitorKey))
             SOURCE->finishWindowDrag();
         return;
+    }
+    {
+        // dead flick: drifted too far to tap but never engaged anything
+        // (e.g. a vertical swipe): select nothing instead of activating
+        // whatever happens to sit under the release point.
+        const auto md = upGlobal - downGlobal;
+        if (std::hypot(md.x, md.y) >= TOUCH_DRAG_PX)
+            return;
     }
     // tap: historical behavior, evaluated at the release point
     if (!mon)
@@ -536,6 +567,14 @@ void COverview::touchPressCancel(int32_t touchID) {
     auto* const OWNER = touchOwner(touchID);
     if (!OWNER)
         return;
+    if (OWNER->touchPress.region == (int)COverview::ERegion::Grid) {
+        OWNER->drawerDragEnd(false);
+        // Grace window, not a snap: the driver may re-press right after a
+        // cancel (stillness looks like abandonment). Stamping holds the
+        // sheet so a re-press continues the pull; true abandonment still
+        // springs back once the window lapses.
+        OWNER->drawerPullStamp();
+    }
     if (OWNER->touchPress.dragging)
         resetOverviewDrag(Hyprexpo::EOverviewDragEventType::Cancel);
     OWNER->cancelTouchPress();
@@ -895,7 +934,7 @@ void COverview::onSwipeUpdate(double delta) {
     const auto          WORKSPACE_FOCUS_ID = closing && closeOnID != -1 ? closeOnID : openedID;
 
     const auto          SIZEMAX = zoomSizeForCurrentGrid(MON->m_size);
-    const auto          POSMAX  = -(tilePosForID(WORKSPACE_FOCUS_ID, SIZEMAX, 0.0) * MON->m_scale);
+    const auto          POSMAX  = zoomPosForTile(WORKSPACE_FOCUS_ID, SIZEMAX);
 
     const auto SIZEMIN = MON->m_size;
     const auto POSMIN  = Vector2D{0, 0};

@@ -125,7 +125,7 @@ plugin {
     # layout + visuals
     columns = 3
     gaps_in = 20
-    bg_col = rgb(101010)
+    bg_col = rgba(00000000)
     workspace_method = center current
     skip_empty = 0
     show_pinned_windows = 0

@@ -150,7 +150,7 @@ void COverview::close(bool switchToSelection) {
 
     const auto targetSize = zoomSizeForCurrentGrid(MON->m_size);
     *size = targetSize;
-    *pos  = -(tilePosForID(SAFEID, targetSize, 0.0) * MON->m_scale);
+    *pos  = zoomPosForTile(SAFEID, targetSize);
 
     closing = true;
 
@@ -269,7 +269,7 @@ void COverview::fullRender() {
     const auto OUTER   = currentOuterInset();
     const auto SHAPE   = currentGridShape();
 
-    clearWithColor(BG_COLOR.stripA());
+    clearWithColor(BG_COLOR); // alpha honored: transparent bg_col shows the desktop through
     if (wallpaperBg && MON->m_background) {
         CRegion backgroundDamage{0, 0, INT16_MAX, INT16_MAX};
         CBox    backgroundBox{{0, 0}, MON->m_transformedSize};
@@ -298,39 +298,38 @@ void COverview::fullRender() {
     const bool        entryAnimationActive = animateEntry && !closing;
     const double entryElapsed = entryAnimationActive ? std::chrono::duration<double>(std::chrono::steady_clock::now() - createdAt).count() : 0.0;
 
-    for (size_t y = 0; y < (size_t)SHAPE.rows; ++y) {
-        for (size_t x = 0; x < (size_t)SHAPE.cols; ++x) {
-            const int id = x + y * SHAPE.cols;
-            if (id < 0 || id >= (int)images.size())
-                continue;
-            CBox texbox = tileBoxForIndex(id, SIZE, GAPSIZE, OUTER, true);
-            texbox.scale(MON->m_scale).translate(pos->value());
-            texbox.round();
-            tileBoxes[id] = texbox;
+    for (int id = 0; id < (int)images.size(); ++id) {
+        if (!isTileValid(id))
+            continue;
+        CBox texbox = tileBoxForIndex(id, SIZE, GAPSIZE, OUTER, true);
+        if (texbox.w <= 0.0 || texbox.h <= 0.0)
+            continue;
+        texbox.scale(MON->m_scale).translate(pos->value());
+        texbox.round();
+        tileBoxes[id] = texbox;
 
-            int tileRound = BASE_ROUND_SCALED;
-            if ((int)id == kbFocusID)
-                tileRound = FOCUS_ROUND_SCALED;
-            else if ((int)id == openedID)
-                tileRound = CURRENT_ROUND_SCALED;
-            else if ((int)id == hoveredID)
-                tileRound = HOVER_ROUND_SCALED;
+        int tileRound = BASE_ROUND_SCALED;
+        if (id == kbFocusID)
+            tileRound = FOCUS_ROUND_SCALED;
+        else if (id == openedID)
+            tileRound = CURRENT_ROUND_SCALED;
+        else if (id == hoveredID)
+            tileRound = HOVER_ROUND_SCALED;
 
-            const int maxCornerPx = std::max(0, (int)std::floor(std::min(texbox.w, texbox.h) / 2.0));
-            tileRound = std::min(tileRound, maxCornerPx);
+        const int maxCornerPx = std::max(0, (int)std::floor(std::min(texbox.w, texbox.h) / 2.0));
+        tileRound = std::min(tileRound, maxCornerPx);
 
-            float alpha = 1.0f;
-            if (entryAnimationActive) {
-                const double delay = (double)id * 0.05;
-                const double raw   = std::clamp((entryElapsed - delay) / 0.2, 0.0, 1.0);
-                alpha              = (float)(raw * raw * (3.0 - 2.0 * raw));
-                if (raw < 1.0)
-                    entryAnimationPending = true;
-            }
-
-            CRegion damage{0, 0, INT16_MAX, INT16_MAX};
-            Render::GL::g_pHyprOpenGL->renderTextureInternal(images[id].fb->getTexture(), texbox, {.damage = &damage, .a = alpha, .round = tileRound, .roundingPower = ROUND_PWR});
+        float alpha = 1.0f;
+        if (entryAnimationActive) {
+            const double delay = (double)id * 0.05;
+            const double raw   = std::clamp((entryElapsed - delay) / 0.2, 0.0, 1.0);
+            alpha              = (float)(raw * raw * (3.0 - 2.0 * raw));
+            if (raw < 1.0)
+                entryAnimationPending = true;
         }
+
+        CRegion damage{0, 0, INT16_MAX, INT16_MAX};
+        Render::GL::g_pHyprOpenGL->renderTextureInternal(images[id].fb->getTexture(), texbox, {.damage = &damage, .a = alpha, .round = tileRound, .roundingPower = ROUND_PWR});
     }
 
     // overlays: labels and borders

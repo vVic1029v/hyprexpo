@@ -283,6 +283,42 @@ plugin {
 
 For more options, see the [configuration options](https://hyprexpo.lol/docs/configuration/options/).
 
+## Experimental: ribbon + app drawer (`exp/ribbon-drawer`)
+
+This branch reworks the overview around a workspace ribbon and a pullable
+app drawer (tracked on the public fork at
+`https://github.com/vVic1029v/hyprexpo`, branch `exp/ribbon-drawer`):
+
+```bash
+git clone -b exp/ribbon-drawer https://github.com/vVic1029v/hyprexpo
+cd hyprexpo
+make dev-build
+```
+
+- **Workspace ribbon.** All provisioned workspaces in one pannable strip
+  (16:10 tiles, `ribbon_scale`), auto-scrolled to the active workspace on
+  open. Pan with horizontal wheel / two-finger swipe, touchscreen swipe,
+  or `hyprexpo:drawer`-style drags; touch rules are deterministic: sideways
+  swipe always pans, only a still 350 ms hold picks a window up, anything
+  else never grabs or selects by accident.
+- **Pullable app drawer.** Search strip plus app grid live on one sheet
+  that follows the finger. A pull only commits past a quarter of the screen
+  height, otherwise it springs back — opening and closing, mouse, touch,
+  wheel, and touchpad alike. Closing pulls must start at the top of the
+  list; pushes from deeper in only rubber-band (`drawer_resist`, default
+  `0.25`). The overview background is transparent by default (`bg_col`
+  alpha is honored); dimming and the opaque search well stay.
+- **Locked order, recent row.** No pin system: the first row holds the most
+  recently launched apps (recorded to `~/.config/hyprexpo/drawer-recent`),
+  then a padded gap, then everything strictly alphabetical. Searching shows
+  plain alphabetical matches. App names resolve against the session locale
+  (no more mixed languages), entries with a missing `TryExec` binary are
+  skipped, and tiles sliding under the search bar are culled instead of
+  overlapping it.
+- **Dispatchers.** `hyprexpo:drawer expand|collapse|toggle` animates the
+  sheet through the same pull engine (never closes the overview itself);
+  use `hyprexpo:expo` to open/close/toggle the overview.
+
 ## Next Steps
 
 - [Chasing Hyprland](https://hyprexpo.lol/docs/guides/chasing-hyprland/)
