@@ -248,6 +248,20 @@ SScanResult scanLayers(const std::vector<std::string>& configured, const std::ve
 
 } // namespace Osk
 
+namespace Fling {
+// Touch-release inertia. Pure: the session owns the sample ring, the slope
+// over the trailing window lives here testable.
+struct SSample {
+    double t = 0.0; // steady-clock seconds
+    double y = 0.0; // cumulative finger travel px
+};
+
+// Finger-space px/s over [now - windowS, now]; 0 when undersampled or
+// degenerate (still finger, single sample, zero span).
+double releaseSlope(const std::vector<SSample>& ordered, double now, double windowS);
+
+} // namespace Fling
+
 namespace Ribbon {
 // Deterministic workspace-strip geometry. Pure: no compositor, no config,
 // plain doubles throughout so the logic suite covers it directly.

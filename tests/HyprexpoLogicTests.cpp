@@ -862,6 +862,27 @@ int main() {
         expect(remembered.hit && remembered.learnedNs.empty(), "learned namespaces hit without relearning");
     }
 
+    // Fling release slope: trailing-window finger velocity, never instant.
+    {
+        using Hyprexpo::Fling::releaseSlope;
+        using Hyprexpo::Fling::SSample;
+        expect(releaseSlope({}, 1.0, 0.1) == 0.0, "fling needs samples");
+        expect(releaseSlope({{1.0, 100.0}}, 1.0, 0.1) == 0.0, "fling needs a pair");
+        // steady 2000px/s upward finger travel over the window
+        const std::vector<SSample> run = {{0.90, 400.0}, {0.93, 340.0}, {0.96, 280.0}, {1.00, 200.0}};
+        expect(near(releaseSlope(run, 1.0, 0.1), -2000.0, 1.0), "fling slope spans the window");
+        // stale head outside the window is ignored
+        const std::vector<SSample> stale = {{0.10, 0.0}, {0.95, 150.0}, {1.00, 100.0}};
+        expect(near(releaseSlope(stale, 1.0, 0.1), -1000.0, 1.0), "fling drops samples older than the window");
+        // still finger: same travel, zero slope
+        const std::vector<SSample> still = {{0.90, 200.0}, {0.95, 200.0}, {1.00, 200.0}};
+        expect(releaseSlope(still, 1.0, 0.1) == 0.0, "still finger yields no fling");
+        // degenerate span guards the divide
+        const std::vector<SSample> tight = {{1.00, 0.0}, {1.00, 50.0}};
+        expect(releaseSlope(tight, 1.0, 0.1) == 0.0, "zero time span yields no fling");
+        expect(releaseSlope(run, 1.0, 0.0) == 0.0, "empty window yields no fling");
+    }
+
     // Issue #133: a monitor whose range starts above 1 keeps its rule-reserved floor even
     // when the lowest workspace is currently empty and therefore does not exist.
     expect(workspaceRuleIDRange("11") == std::optional<SWorkspaceIDRange>{{11, 11}}, "numeric workspace rules reserve a single ID");

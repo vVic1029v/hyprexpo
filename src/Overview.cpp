@@ -988,30 +988,6 @@ WORKSPACEID nextEmptyWorkspaceIDForMonitor(const PHLMONITOR& monitor) {
     return WORKSPACE_INVALID;
 }
 
-// Returns pair of {isCenter, startWorkspaceID} for the requested monitor.
-static std::pair<bool, int> getWorkspaceMethodForMonitor(PHLMONITOR monitor) {
-    static auto const* PMETHOD = (Hyprlang::STRING const*)HyprlandAPI::getConfigValue(PHANDLE, "plugin:hyprexpo:workspace_method")->getDataStaticPtr();
-
-    const std::string monitorName = monitor->m_name;
-    const std::string configStr = std::string{*PMETHOD};
-    const auto        parsed = Hyprexpo::resolveWorkspaceMethodForMonitor(configStr, monitorName);
-
-    int methodStartID = monitor->activeWorkspaceID();
-    if (!parsed.valid) {
-        Log::logger->log(Log::ERR, "[hyprexpo] invalid workspace_method for monitor {}: {} ({})", monitorName, configStr, parsed.error);
-        return {true, methodStartID};
-    }
-
-    const bool methodCenter = parsed.mode == Hyprexpo::EWorkspaceMethodMode::Center;
-    if (parsed.workspace != "current") {
-        methodStartID = workspaceIDForMonitor(monitor, parsed.workspace);
-        if (methodStartID == WORKSPACE_INVALID)
-            methodStartID = monitor->activeWorkspaceID();
-    }
-
-    return {methodCenter, methodStartID};
-}
-
 Hyprexpo::SGridShape COverview::currentGridShape() const {
     return gridShape;
 }
@@ -1218,8 +1194,6 @@ COverview::COverview(PHLWORKSPACE startedOn_, PHLMONITOR monitor_, bool swipe_, 
     static auto* const* PROWS     = (Hyprlang::INT* const*)HyprlandAPI::getConfigValue(PHANDLE, "plugin:hyprexpo:rows")->getDataStaticPtr();
     static auto* const* PGAPS     = (Hyprlang::INT* const*)HyprlandAPI::getConfigValue(PHANDLE, "plugin:hyprexpo:gaps_in")->getDataStaticPtr();
     static auto* const* PCOL      = (Hyprlang::INT* const*)HyprlandAPI::getConfigValue(PHANDLE, "plugin:hyprexpo:bg_col")->getDataStaticPtr();
-    static auto* const* PSKIP     = (Hyprlang::INT* const*)HyprlandAPI::getConfigValue(PHANDLE, "plugin:hyprexpo:skip_empty")->getDataStaticPtr();
-    static auto* const* PMAXWS    = (Hyprlang::INT* const*)HyprlandAPI::getConfigValue(PHANDLE, "plugin:hyprexpo:max_workspace")->getDataStaticPtr();
     static auto* const* PSHOWNUM  = (Hyprlang::INT* const*)HyprlandAPI::getConfigValue(PHANDLE, "plugin:hyprexpo:show_workspace_numbers")->getDataStaticPtr();
     static auto* const* PDYNAMIC  = (Hyprlang::INT* const*)HyprlandAPI::getConfigValue(PHANDLE, "plugin:hyprexpo:dynamic_grid")->getDataStaticPtr();
     static auto* const* PFILLGAPS = (Hyprlang::INT* const*)HyprlandAPI::getConfigValue(PHANDLE, "plugin:hyprexpo:fill_gaps")->getDataStaticPtr();
@@ -1239,137 +1213,24 @@ COverview::COverview(PHLWORKSPACE startedOn_, PHLMONITOR monitor_, bool swipe_, 
     wallpaperBg          = **PWALLBG;
     dynamicGrid          = **PDYNAMIC;
 
-    // Get workspace method for this specific monitor
-    auto [methodCenter, methodStartID] = getWorkspaceMethodForMonitor(pMonitor.lock());
-
-    // r includes empty workspaces; m skips over them
-    const bool    skipEmpty    = **PSKIP;
-    const int64_t maxWorkspace = std::max<Hyprlang::INT>(0, **PMAXWS);
-    std::string   selector     = skipEmpty ? "m" : "r";
-    emptyTilesSelectable = skipEmpty;
-
-    if (!methodCenter && !skipEmpty && maxWorkspace <= 0 && startedOn) {
-        const int columns = Hyprexpo::gridColumnsToIncludeWorkspace(gridShape.cols, methodStartID, (int)startedOn->m_id,
-                                                                   HyprexpoConfig::COLUMNS_MAX, **PROWS > 0 ? gridShape.rows : 0);
-        gridShape = Hyprexpo::computeFixedGridShape(columns, **PROWS);
+    // Ribbon range: consecutive workspaces 1..M. M is the highest
+    // in-use ID: occupied workspaces plus the opened one (an empty
+    // focused workspace counts). Trailing dead empties above that vanish;
+    // in-between empties always show. No methods, no skipping, no caps,
+    // no sliding window: nothing wraps, nothing in use disappears. Tile
+    // sizing still comes from columns/rows above; the strip pans when the
+    // range overflows the output.
+    int64_t highestID = (startedOn && startedOn->m_id >= 1) ? startedOn->m_id : 1;
+    for (const auto& workspace : State::workspaceState()->workspacesCopy()) {
+        if (!workspace || workspace->m_isSpecialWorkspace || workspace->m_id < 1)
+            continue;
+        if (workspace->getWindowCount() > 0)
+            highestID = std::max(highestID, workspace->m_id);
     }
-
-    images.resize(gridShape.cols * gridShape.rows);
-
-    const bool anchorSelector = !methodCenter || (!skipEmpty && maxWorkspace > 0 && methodStartID != startedOn->m_id);
-    if (anchorSelector) {
-        PHLWORKSPACE PWORKSPACESTART;
-        for (const auto& workspace : State::workspaceState()->workspacesCopy()) {
-            if (workspace->m_id == methodStartID) {
-                PWORKSPACESTART = workspace;
-                break;
-            }
-        }
-        if (!PWORKSPACESTART)
-            PWORKSPACESTART = CWorkspace::create(methodStartID, pMonitor.lock(), std::to_string(methodStartID));
-
-        // Relative selectors must use an explicit first/center anchor, not the opened workspace.
-        pMonitor->m_activeWorkspace = PWORKSPACESTART;
-    }
-
-    if (methodCenter) {
-        int currentID = methodStartID;
-        int firstID   = currentID;
-
-        std::optional<int64_t> lowestExistingID;
-        std::optional<int64_t> highestExistingID;
-        // Centering bounds come from the workspaces that actually exist on
-        // this monitor. This must run for skip_empty too: without bounds the
-        // backtrack target collapses and the strip starts at the active
-        // workspace with no way to reach previous ones.
-        for (const auto& workspace : State::workspaceState()->workspacesCopy()) {
-            if (!workspace || workspace->m_isSpecialWorkspace || workspace->m_monitor != PMONITOR)
-                continue;
-
-            lowestExistingID  = lowestExistingID ? std::min(*lowestExistingID, workspace->m_id) : workspace->m_id;
-            highestExistingID = highestExistingID ? std::max(*highestExistingID, workspace->m_id) : workspace->m_id;
-        }
-
-        if (!skipEmpty) {
-            // Workspace rules reserve IDs for this monitor even while those workspaces are empty
-            // and therefore do not exist, so a range such as 11-20 keeps its real floor (#133).
-            for (const auto& rule : Config::workspaceRuleMgr()->getAllWorkspaceRules()) {
-                if (!rule || !rule->isEnabled() || rule->m_monitor.empty())
-                    continue;
-
-                const auto range = Hyprexpo::workspaceRuleIDRange(rule->m_workspaceString);
-                if (!range)
-                    continue;
-
-                const auto boundMonitor = State::monitorState()->query().relativeTo(PMONITOR).configString(rule->m_monitor).run();
-                if (!boundMonitor || boundMonitor != PMONITOR)
-                    continue;
-
-                lowestExistingID  = lowestExistingID ? std::min(*lowestExistingID, range->first) : range->first;
-                highestExistingID = highestExistingID ? std::max(*highestExistingID, range->last) : range->last;
-            }
-        }
-
-        const size_t backtrackTarget = Hyprexpo::centeredWorkspaceBacktrack(images.size(), methodStartID, lowestExistingID, highestExistingID);
-        int backtracked = 0;
-
-        // Unfilled skip-empty tiles may create a workspace; capped padding cannot.
-        for (size_t i = 0; i < images.size(); i++) {
-            images[i].workspaceID = WORKSPACE_INVALID;
-        }
-
-        // Scan through workspaces lower than methodStartID until we wrap; count how many
-        for (size_t i = 1; i <= backtrackTarget; ++i) {
-            currentID = workspaceIDForMonitor(PMONITOR, selector + "-" + std::to_string(i));
-            if (currentID >= firstID)
-                break;
-
-            backtracked++;
-            firstID = currentID;
-        }
-
-        // Scan through workspaces higher than methodStartID. If using "m"
-        // (skip_empty), stop when we wrap, leaving the rest of the workspace
-        // ID's set to WORKSPACE_INVALID
-        for (size_t i = 0; i < images.size(); ++i) {
-            auto& image = images[i];
-            if ((int64_t)i - backtracked < 0) {
-                currentID = workspaceIDForMonitor(PMONITOR, selector + std::to_string((int64_t)i - backtracked));
-            } else {
-                currentID = workspaceIDForMonitor(PMONITOR, selector + "+" + std::to_string((int64_t)i - backtracked));
-                if (i > 0 && currentID <= firstID)
-                    break;
-            }
-            image.workspaceID = currentID;
-        }
-
-    } else {
-        int currentID         = methodStartID;
-        images[0].workspaceID = currentID;
-
-        // Scan through workspaces higher than methodStartID. If using "m"
-        // (skip_empty), stop when we wrap, leaving the rest of the workspace
-        // ID's set to WORKSPACE_INVALID
-        for (size_t i = 1; i < images.size(); ++i) {
-            auto& image = images[i];
-            currentID   = workspaceIDForMonitor(PMONITOR, selector + "+" + std::to_string(i));
-            if (currentID <= methodStartID)
-                break;
-            image.workspaceID = currentID;
-        }
-
-    }
-
-    if (anchorSelector)
-        pMonitor->m_activeWorkspace = startedOn;
-
-    // Keep Hyprland's monitor-aware ordering and apply the cap only to emitted IDs.
-    if (!skipEmpty && maxWorkspace > 0) {
-        for (auto& image : images) {
-            if (image.workspaceID > maxWorkspace)
-                image.workspaceID = WORKSPACE_INVALID;
-        }
-    }
+    emptyTilesSelectable = false; // every tile names a real ID now
+    images.resize((size_t)std::max<int64_t>(1, highestID));
+    for (size_t i = 0; i < images.size(); ++i)
+        images[i].workspaceID = (int64_t)i + 1;
 
     if (dynamicGrid) {
         std::vector<int64_t> visibleWorkspaceIDs;

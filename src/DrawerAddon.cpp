@@ -22,6 +22,8 @@
 #include <hyprland/src/render/Renderer.hpp>
 #include <hyprland/src/output/Monitor.hpp>
 #include <hyprland/src/plugins/PluginAPI.hpp>
+#include <hyprland/src/desktop/state/WindowState.hpp>
+#include <hyprland/src/desktop/view/Window.hpp>
 #include <hyprland/src/render/OpenGL.hpp>
 #undef private
 #undef protected
@@ -33,8 +35,40 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <dlfcn.h>
+#include <format>
+#include <sstream>
 
 namespace {
+
+// librsvg bound at runtime: optional dependency, ABI-declared by hand so
+// nothing new is linked (glib/gobject already are; GError comes from their
+// headers like everywhere else in this file).
+struct RsvgRect {
+    double x = 0.0, y = 0.0, width = 0.0, height = 0.0;
+};
+struct SvgRsvg {
+    using NewFromFile    = void* (*)(const char*, GError**);
+    using RenderDocument = int (*)(void*, void*, const void*, GError**);
+    void*          handle         = nullptr;
+    NewFromFile    newFromFile    = nullptr;
+    RenderDocument renderDocument = nullptr;
+    bool load() {
+        if (handle)
+            return true;
+        handle = dlopen("librsvg-2.so.2", RTLD_LAZY | RTLD_LOCAL);
+        if (!handle)
+            return false;
+        newFromFile    = (NewFromFile)dlsym(handle, "rsvg_handle_new_from_file");
+        renderDocument = (RenderDocument)dlsym(handle, "rsvg_handle_render_document");
+        if (!newFromFile || !renderDocument) {
+            dlclose(handle);
+            handle = nullptr;
+            return false;
+        }
+        return true;
+    }
+};
 
 // Drawer tunables, read live through the config module (no caching, so
 // `hyprctl keyword` keeps working). Clamp here so geometry never inverts.
@@ -67,6 +101,14 @@ constexpr double RECENT_PAD_PX = 20.0;
 // the threshold AND keep pushing against this wall to commit. Anything
 // shorter springs back on idle instead of toggling on a small flick.
 constexpr double COMMIT_OVERSHOOT_PX = 24.0;
+// Touch fling tuning: release slope is measured over this trailing window
+// (never from a single instant delta); inertia below MIN never starts,
+// friction drains exponentially, STOP ends it.
+constexpr double VEL_WINDOW_S    = 0.1;
+constexpr double MIN_FLING_PX_S  = 350.0;
+constexpr double MAX_FLING_PX_S  = 9000.0;
+constexpr double FLING_FRICTION  = 5.0;
+constexpr double FLING_STOP_PX_S = 80.0;
 
 double smooth01(double t) {
     t = std::clamp(t, 0.0, 1.0);
@@ -189,7 +231,11 @@ int CDrawerAddon::appAt(const Vector2D& local) const {
     if (col < 0 || col >= columns() || lx - col * (tw + 16.0) > tw)
         return -1;
     const double ly = local.y - (top() - state.scroll);
-    if (ly < 0 || ly >= clipH())
+    // Band check in screen space: ly carries the scroll offset (content
+    // space), so comparing it against the band height kills the bottom
+    // `scroll` px of the visible band — the last rows whenever scrolled.
+    const double sy = local.y - top();
+    if (sy < 0 || sy >= clipH())
         return -1;
     // Row 0 is exactly the recent row; the padded gap after it is dead.
     int    row;
@@ -247,6 +293,7 @@ void CDrawerAddon::onOpen() {
 void CDrawerAddon::refilter() {
     state.order = Hyprexpo::Drawer::filterApps(state.apps, state.query, state.recent, columns(), state.recentShown);
     state.scroll = std::clamp(state.scroll, 0.0, maxScroll());
+    state.flingVel = 0.0; // content changed under the motion: stop dead
     if (state.hoverApp >= (int)state.order.size())
         state.hoverApp = -1;
     state.queryDirty = true;
@@ -264,6 +311,7 @@ void CDrawerAddon::setFitted(bool fitted) {
         return;
     state.fitted = fitted;
     state.scroll = 0;
+    state.flingVel   = 0;
     state.lastPullS   = 0;
     state.pullVisual  = 0;
     state.pulling     = false;
@@ -296,20 +344,43 @@ double CDrawerAddon::listScroll(double fingerDy) {
 void CDrawerAddon::wheel(double fingerDy) {
     if (m_owner->closeCommitted())
         return;
+    state.flingVel = 0.0; // wheel takes over: inertia stops
     pullStamp();
     const double threshold = pullThreshold();
     const double span      = pullSpan();
     if (span <= 0.0)
         return;
     if (!state.fitted) {
-        if (fingerDy >= 0.0) {
+        if (state.pullVisual < 0.0 || fingerDy < 0.0) {
+            // A live pull tracks both directions; fresh pushes still
+            // detent-gate. Only idle snaps it home, never a reversal.
+            // Detent order matters: commit only when already holding
+            // against the wall and still pushing.
+            if (fingerDy < 0.0 && state.pullVisual <= -(threshold + COMMIT_OVERSHOOT_PX))
+                commitPull(true, span);
+            else
+                pushVisual(fingerDy, -(threshold + COMMIT_OVERSHOOT_PX), 0.0);
+        } else {
             state.pullVisual = 0.0;
-            return;
         }
-        // Detent order matters: commit only when already holding against
-        // the wall and still pushing, otherwise accumulate up to the wall.
-        if (!pushPast(threshold + COMMIT_OVERSHOOT_PX, true, span))
-            pushVisual(fingerDy, -(threshold + COMMIT_OVERSHOOT_PX), 0.0);
+        m_owner->damage();
+        return;
+    }
+    if (state.pullVisual > 0.0) {
+        // A live pull tracks both directions like a finger: reversals walk
+        // the sheet back, crossing zero spills into the list, and only the
+        // detent (wheel) or the release (finger) may send it home.
+        if (fingerDy > 0.0 && state.pullVisual >= threshold + COMMIT_OVERSHOOT_PX) {
+            commitPull(false, span);
+        } else {
+            const double next = state.pullVisual + fingerDy;
+            if (next <= 0.0) {
+                state.pullVisual = 0.0;
+                listScroll(next);
+            } else {
+                state.pullVisual = std::min(next, threshold + COMMIT_OVERSHOOT_PX);
+            }
+        }
         m_owner->damage();
         return;
     }
@@ -317,12 +388,8 @@ void CDrawerAddon::wheel(double fingerDy) {
     const double over   = listScroll(fingerDy);
     // Engagement is scroll position, never screen position: only a push
     // that starts within the top row may close. Deeper pushes just scroll.
-    if (fingerDy > 0.0 && over > 0.0 && before <= rowH()) {
-        if (!pushPast(threshold + COMMIT_OVERSHOOT_PX, false, span))
-            pushVisual(over, 0.0, threshold + COMMIT_OVERSHOOT_PX);
-    } else {
-        state.pullVisual = 0.0;
-    }
+    if (fingerDy > 0.0 && over > 0.0 && before <= rowH())
+        state.pullVisual = std::min(over, threshold + COMMIT_OVERSHOOT_PX);
     m_owner->damage();
 }
 
@@ -363,18 +430,6 @@ void CDrawerAddon::pushVisual(double delta, double lo, double hi) {
     }
 }
 
-// Detent commit check for releaseless sources (wheel/touchpad): past the
-// wall means committed. Release-gated sources (finger/mouse) never call
-// this; endDrag decides for them.
-bool CDrawerAddon::pushPast(double wall, bool open, double span) {
-    const double traveled = open ? -state.pullVisual : state.pullVisual;
-    if (traveled >= wall) {
-        commitPull(open, span);
-        return true;
-    }
-    return false;
-}
-
 // Pull path (mouse/touch drags): the sheet follows the finger via
 // pullVisual; the open/close decision happens on release (endDrag).
 void CDrawerAddon::dragAdvance(double fingerDy) {
@@ -394,23 +449,42 @@ void CDrawerAddon::dragAdvance(double fingerDy) {
     }
     state.pulling = true;
     if (state.pullEngaged) {
-        // Drag started at the top: the list absorbs what it can, the
-        // overshoot pulls the sheet toward close (release decides).
-        const double over = listScroll(fingerDy);
-        if (over > 0.0)
-            pushVisual(over, 0.0, span);
-        else
-            state.pullVisual = 0.0;
+        // Drag started at the top. While the sheet is displaced it owns
+        // the gesture in both directions, so reversing walks it back
+        // instead of teleporting it home — only the release may send it
+        // back. Crossing zero spills the remainder into the list.
+        if (state.pullVisual > 0.0) {
+            const double next = state.pullVisual + fingerDy;
+            if (next <= 0.0) {
+                state.pullVisual = 0.0;
+                listScroll(next);
+            } else {
+                pushVisual(fingerDy, 0.0, span);
+            }
+        } else {
+            const double over = listScroll(fingerDy);
+            if (over > 0.0)
+                pushVisual(over, 0.0, span);
+        }
         m_owner->damage();
         return;
     }
     // Drag started scrolled down: plain list scroll, plus rubber-band
     // resistance when pushing past the top. Never accumulates a close.
-    const double over = listScroll(fingerDy);
-    if (over > 0.0)
-        pushVisual(over * (double)drawerCfgResist(), 0.0, RESIST_CAP_PX);
-    else
-        state.pullVisual = 0.0;
+    // A live rubber band tracks back 1:1 for the same no-teleport reason.
+    if (state.pullVisual > 0.0) {
+        const double next = state.pullVisual + fingerDy;
+        if (next <= 0.0) {
+            state.pullVisual = 0.0;
+            listScroll(next);
+        } else {
+            state.pullVisual = std::min(next, RESIST_CAP_PX);
+        }
+    } else {
+        const double over = listScroll(fingerDy);
+        if (over > 0.0)
+            pushVisual(over * (double)drawerCfgResist(), 0.0, RESIST_CAP_PX);
+    }
     m_owner->damage();
 }
 
@@ -444,6 +518,10 @@ void CDrawerAddon::tap(const Vector2D& local) {
     }
     const int idx = appAt(local);
     if (idx < 0) {
+        // Diagnostic for dead taps: proves whether the press reached the
+        // grid at all (position, model size, scroll state).
+        Log::logger->log(Log::ERR, "[hyprexpo] dead tap at {:.0f},{:.0f} (order={}, scroll={:.0f}, fitted={})", local.x, local.y,
+                         (int)state.order.size(), state.scroll, state.fitted ? 1 : 0);
         state.searchFocused = false;
         m_owner->damage();
         return;
@@ -454,12 +532,82 @@ void CDrawerAddon::tap(const Vector2D& local) {
 void CDrawerAddon::launch(size_t orderIdx) {
     if (orderIdx >= state.order.size() || state.order[orderIdx] == Hyprexpo::Drawer::EMPTY_SLOT)
         return;
-    // Record first: this launch tops the recent row next open. Launch
-    // itself is detached; close() below destroys this session.
-    Hyprexpo::Drawer::recordRecent(state.apps[state.order[orderIdx]].id);
-    Hyprexpo::Drawer::launchApp(state.apps[state.order[orderIdx]]);
+    const auto& app = state.apps[state.order[orderIdx]];
+    // Tapping counts as use either way, so the recent row tracks it.
+    Hyprexpo::Drawer::recordRecent(app.id);
+    // Already open: focus it (visible feedback) instead of duplicating.
+    // Terminals exempt: multi-instance tools open new, always.
+    if (!app.terminal && focusIfOpen(app)) {
+        state.searchFocused = false;
+        m_owner->close(false);
+        return;
+    }
+    Log::logger->log(Log::ERR, "[hyprexpo] launching {}: {}", app.id, app.exec);
+    HyprlandAPI::addNotification(PHANDLE, "Launching " + app.name, CHyprColor{0.16, 0.76, 0.87, 1.0}, 2000);
+    // Launch itself is detached; close() below destroys this session.
+    Hyprexpo::Drawer::launchApp(app);
     state.searchFocused = false;
     m_owner->close(false);
+}
+
+// Focus an already-open app instead of launching a duplicate. Matches
+// StartupWMClass exactly, else the exec basename against the window class
+// (case-insensitive), else the flatpak app id and its last component.
+// Prefers a window on the overview's workspace so a tap doesn't yank you
+// elsewhere when avoidable.
+bool CDrawerAddon::focusIfOpen(const Hyprexpo::Drawer::SApp& app) {
+    auto lower = [](std::string s) {
+        for (auto& c : s)
+            c = (char)tolower((unsigned char)c);
+        return s;
+    };
+    std::string execBase;
+    {
+        std::istringstream in(app.exec);
+        in >> execBase;
+        const auto slash = execBase.find_last_of('/');
+        if (slash != std::string::npos)
+            execBase = execBase.substr(slash + 1);
+        execBase = lower(execBase);
+    }
+    std::string flatTail;
+    if (!app.flatpakAppId.empty()) {
+        flatTail = lower(app.flatpakAppId);
+        const auto dot = flatTail.find_last_of('.');
+        if (dot != std::string::npos)
+            flatTail = flatTail.substr(dot + 1);
+    }
+    const auto MON = m_owner->pMonitor.lock();
+    const int64_t here =
+        MON && MON->m_activeWorkspace ? MON->m_activeWorkspace->m_id : (int64_t)WORKSPACE_INVALID;
+    PHLWINDOW fallback;
+    for (const auto& window : Desktop::windowState()->windows()) {
+        if (!window)
+            continue;
+        const std::string cls = lower(window->m_class);
+        const bool match      = (!app.startupWmClass.empty() && window->m_class == app.startupWmClass) || (!execBase.empty() && cls == execBase) ||
+                           (!flatTail.empty() && (cls == lower(app.flatpakAppId) || cls == flatTail));
+        if (!match)
+            continue;
+        const int64_t ws = window->m_workspace ? window->m_workspace->m_id : (int64_t)WORKSPACE_INVALID;
+        if (ws == here) {
+            const std::string out = HyprlandAPI::invokeHyprctlCommand(
+                "dispatch", std::format("focuswindow address:{:x}", (uintptr_t)window.get()));
+            if (!out.empty())
+                Log::logger->log(Log::ERR, "[hyprexpo] focuswindow replied: {}", out);
+            return true;
+        }
+        if (!fallback)
+            fallback = window;
+    }
+    if (fallback) {
+        const std::string out = HyprlandAPI::invokeHyprctlCommand(
+            "dispatch", std::format("focuswindow address:{:x}", (uintptr_t)fallback.get()));
+        if (!out.empty())
+            Log::logger->log(Log::ERR, "[hyprexpo] focuswindow replied: {}", out);
+        return true;
+    }
+    return false;
 }
 
 void CDrawerAddon::typeText(const std::string& text) {
@@ -494,6 +642,42 @@ bool CDrawerAddon::confirmTop() {
 
 // --- textures ---
 
+// Rasterize an SVG icon at exactly `target` px via runtime-bound librsvg.
+// Empty texture when the library (or the file) refuses: the caller falls
+// through to the glyph. No new build dependency by design.
+SP<Render::ITexture> renderSvgIcon(const std::string& path, int target) {
+    static SvgRsvg rsvg;
+    if (!rsvg.load())
+        return {};
+    GError* err    = nullptr;
+    void*   handle = rsvg.newFromFile(path.c_str(), &err);
+    if (err)
+        g_error_free(err);
+    if (!handle)
+        return {};
+    cairo_surface_t* surf = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, target, target);
+    SP<Render::ITexture> tex;
+    if (cairo_surface_status(surf) == CAIRO_STATUS_SUCCESS) {
+        cairo_t* cr = cairo_create(surf);
+        // transparent tile first: icons with no background stay clean
+        cairo_set_source_rgba(cr, 0.0, 0.0, 0.0, 0.0);
+        cairo_paint(cr);
+        const RsvgRect viewport{0.0, 0.0, (double)target, (double)target};
+        err         = nullptr;
+        const int ok = rsvg.renderDocument(handle, cr, &viewport, &err);
+        if (err)
+            g_error_free(err);
+        cairo_destroy(cr);
+        if (ok) {
+            cairo_surface_flush(surf);
+            tex = uploadCairoSurface(surf);
+        }
+    }
+    cairo_surface_destroy(surf);
+    g_object_unref(handle);
+    return tex;
+}
+
 SP<Render::ITexture> CDrawerAddon::iconTexture(const Hyprexpo::Drawer::SApp& app, int px, double scale) {
     const std::string key = app.id;
     auto it = state.iconTex.find(key);
@@ -501,9 +685,11 @@ SP<Render::ITexture> CDrawerAddon::iconTexture(const Hyprexpo::Drawer::SApp& app
         return it->second;
     SP<Render::ITexture> tex;
     const std::string path = Hyprexpo::Drawer::resolveIconPath(app.icon, (int)(px * scale));
-    if (!path.empty()) {
+    const int target = std::max(16, (int)(px * scale));
+    if (!path.empty() && path.size() >= 4 && path.compare(path.size() - 4, 4, ".svg") == 0)
+        tex = renderSvgIcon(path, target);
+    if (!tex && !path.empty()) {
         GError* err = nullptr;
-        const int target = std::max(16, (int)(px * scale));
         GdkPixbuf* pb = gdk_pixbuf_new_from_file_at_size(path.c_str(), target, target, &err);
         if (err)
             g_error_free(err);
@@ -592,8 +778,25 @@ void CDrawerAddon::stepFrame() {
         if (std::abs(state.anim - target) < 0.002f)
             state.anim = target;
     }
-    if (state.anim == target && state.pullVisual == 0.0)
+    if (state.anim == target && state.pullVisual == 0.0 && state.flingVel == 0.0)
         return;
+    // List inertia: integrates only with no live input and no displaced
+    // sheet; anything else (grab, pull, snap, state flip) owns the motion.
+    if (state.flingVel != 0.0) {
+        if (state.fitted && !state.pulling && !state.touchDownActive && !state.mouseArmed && state.pullVisual == 0.0) {
+            const double max = maxScroll();
+            state.scroll     = std::clamp(state.scroll + state.flingVel * dt, 0.0, max);
+            if (state.scroll <= 0.0 || state.scroll >= max) {
+                state.flingVel = 0.0; // hit an end: stop dead, no bounce
+            } else {
+                state.flingVel *= std::exp(-FLING_FRICTION * dt);
+                if (std::abs(state.flingVel) < FLING_STOP_PX_S)
+                    state.flingVel = 0.0;
+            }
+        } else {
+            state.flingVel = 0.0;
+        }
+    }
     m_owner->damage();
 }
 
@@ -729,6 +932,7 @@ void CDrawerAddon::pointerDown(const Vector2D& local, uint32_t button) {
     (void)local; // latch is scroll position; the press point is irrelevant
     state.mouseArmed = true;
     state.mouseMoved = false;
+    state.flingVel   = 0.0; // mouse grabs the list: inertia stops
     beginPull();
 }
 
@@ -764,19 +968,66 @@ void CDrawerAddon::updateHover(const Vector2D& local) {
 
 void CDrawerAddon::touchDown(const Vector2D&) {
     state.touchDownActive = true;
+    state.flingVel       = 0.0; // finger grabs the list: inertia stops
+    state.velCount       = 0;
+    state.velCumY        = 0.0;
     beginPull(); // latch is scroll position; the touch point is irrelevant
 }
 
-void CDrawerAddon::touchMotion(double dy) {
+void CDrawerAddon::touchMotion(double dy, double pressDist) {
     dragAdvance(dy);
+    // Velocity cache: cumulative finger travel stamped per motion event.
+    const double now = pullStamp();
+    state.velCumY += dy;
+    const int i    = state.velCount % State::VEL_SAMPLES;
+    state.velT[i]  = now;
+    state.velY[i]  = state.velCumY;
+    ++state.velCount;
+    if (pressDist >= Hyprexpo::Addon::TAP_SLOP_PX) {
+        // Scrolling, not pressing: the highlight must not chase the
+        // finger. A resting finger (inside slop) keeps the pressed-app
+        // highlight set at down.
+        if (state.hoverApp != -1) {
+            state.hoverApp = -1;
+            m_owner->damage();
+        }
+    }
+}
+
+double CDrawerAddon::releaseVelocity(double now) {
+    // Materialize the ring oldest-first for the pure slope; a handful of
+    // samples once per release, no steady-state allocation.
+    const int total = std::min(state.velCount, State::VEL_SAMPLES);
+    std::vector<Hyprexpo::Fling::SSample> ordered;
+    ordered.reserve((size_t)std::max(0, total));
+    for (int k = state.velCount - total; k < state.velCount; ++k)
+        ordered.push_back({state.velT[k % State::VEL_SAMPLES], state.velY[k % State::VEL_SAMPLES]});
+    return Hyprexpo::Fling::releaseSlope(ordered, now, VEL_WINDOW_S);
+}
+
+void CDrawerAddon::maybeStartFling() {
+    state.flingVel = 0.0;
+    if (!state.fitted || state.pullVisual != 0.0)
+        return;
+    const double fingerVel = releaseVelocity(pullStamp());
+    double       scrollVel = -fingerVel; // list moves against the finger
+    if (std::abs(scrollVel) < MIN_FLING_PX_S)
+        return;
+    state.flingVel = std::clamp(scrollVel, -MAX_FLING_PX_S, MAX_FLING_PX_S);
 }
 
 void CDrawerAddon::touchUp(const Vector2D& upLocal, const Vector2D& pressDelta) {
     state.touchDownActive = false;
+    const bool wasFitted  = state.fitted;
     endDrag();
-    if (std::hypot(pressDelta.x, pressDelta.y) >= 12.0)
-        return; // was a pull, not a tap
-    tap(upLocal);
+    if (std::hypot(pressDelta.x, pressDelta.y) < Hyprexpo::Addon::TAP_SLOP_PX) {
+        tap(upLocal);
+        return;
+    }
+    // Scroll release with momentum: fling the list, unless this same
+    // release just opened/closed the sheet (momentum belongs to pulls).
+    if (wasFitted)
+        maybeStartFling();
 }
 
 void CDrawerAddon::touchCancel() {

@@ -22,9 +22,12 @@ inline constexpr size_t EMPTY_SLOT = static_cast<size_t>(-1);
 
 struct SApp {
     std::string              id;       // desktop file id, e.g. firefox.desktop
-    std::string              name;     // display name
-    std::string              exec;     // cleaned exec line (no % codes)
+    std::string              name;     // display name (session locale)
+    std::string              exec;     // cleaned exec line (no % codes, no @@ tokens)
     std::string              icon;     // icon name or absolute path
+    std::string              startupWmClass; // StartupWMClass for open-app matching
+    std::string              flatpakAppId;   // flatpak run <appid> (class matching)
+    std::string              workingDir;     // Path= working directory (may be empty)
     bool                     terminal  = false;
     std::vector<std::string> categories;
 };
@@ -42,9 +45,14 @@ void                     recordRecent(const std::string& id);
 // Non-empty query: plain alphabetical matches.
 std::vector<size_t> filterApps(const std::vector<SApp>& apps, const std::string& query, const std::vector<std::string>& recent, int firstRowCount,
                                int& recentShown);
-// Icon lookup: name -> absolute PNG path (hicolor/Adwaita/pixmaps walk).
-// Empty when only SVG themed icons exist (no librsvg headers on this box).
+// Icon lookup: name -> absolute PNG/XPM/SVG path (hicolor/Adwaita themes,
+// pixmaps, flatpak exports). SVG masters are preferred when the librsvg
+// runtime is present (see haveSvgLoader); without it they are skipped and
+// the glyph fallback applies as before.
+// Empty when no rasterizable file exists.
 std::string resolveIconPath(const std::string& icon, int minPx);
+// True when librsvg-2.so.2 resolves: SVG icons rasterize, no new build dep.
+bool haveSvgLoader();
 // Routes printable keys / editing keys to the focused drawer search box.
 // Returns true when consumed. Latin-only v1: no IME.
 bool drawerSearchKey(const IKeyboard::SKeyEvent& event);

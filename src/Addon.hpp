@@ -25,6 +25,10 @@ class COverview;
 
 namespace Hyprexpo::Addon {
 
+// Tap slop shared by core and addons: press travel below this is a tap,
+// above it a gesture. Mirrors the 12px mouse-drag threshold.
+inline constexpr double TAP_SLOP_PX = 12.0;
+
 // Region classification below the ribbon strip. Values mirror
 // COverview::ERegion so the core maps them 1:1.
 enum class EBandRegion {
@@ -69,7 +73,7 @@ class IOverviewAddon {
     // Touch. The core owns press identity (touchID); the addon owns the
     // gesture: latch on down, pull on motion, commit-or-tap on up.
     virtual void touchDown(const Vector2D& local)                          = 0;
-    virtual void touchMotion(double dy)                                    = 0;
+    virtual void touchMotion(double dy, double pressDist)                    = 0;
     virtual void touchUp(const Vector2D& upLocal, const Vector2D& pressDelta) = 0;
     virtual void touchCancel()                                             = 0;
 

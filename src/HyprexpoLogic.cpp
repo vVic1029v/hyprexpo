@@ -866,4 +866,20 @@ SScanResult scanLayers(const std::vector<std::string>& configured, const std::ve
 
 } // namespace Osk
 
+namespace Fling {
+
+double releaseSlope(const std::vector<SSample>& ordered, double now, double windowS) {
+    if (ordered.size() < 2 || !(windowS > 0.0))
+        return 0.0;
+    size_t first = 0;
+    while (first + 1 < ordered.size() && ordered[first].t < now - windowS)
+        ++first;
+    const double dt = ordered.back().t - ordered[first].t;
+    if (dt < 0.008)
+        return 0.0;
+    return (ordered.back().y - ordered[first].y) / dt;
+}
+
+} // namespace Fling
+
 }

@@ -380,8 +380,9 @@ int main() {
     expectContains(configSource, "\"plugin:hyprexpo:rows\"", "explicit fixed rows are registered as configuration");
     expectContains(source, "{\"plugin:hyprexpo:rows\", HyprexpoConfig::ROWS_DEFAULT}", "row fallback uses the shared default");
     expectContains(overviewConstructor, "Hyprexpo::computeFixedGridShape(**PCOLUMNS, **PROWS)", "fixed grids resolve both configured dimensions");
-    expectContains(overviewConstructor, "images.resize(gridShape.cols * gridShape.rows)", "fixed grids allocate rectangular capacity including empty slots");
-    expectContains(overviewConstructor, "**PROWS > 0 ? gridShape.rows : 0", "first-anchor growth distinguishes explicit from inherited rows");
+    expectContains(overviewConstructor, "images.resize((size_t)std::max<int64_t>(1, highestID))",
+                   "the ribbon allocates the consecutive range, not a rectangular capacity");
+    expectContains(overviewConstructor, "images[i].workspaceID = (int64_t)i + 1", "every tile names its own ID: 1..max, no gaps");
     expectAbsent(overviewConstructor, "SIDE_LENGTH", "construction and captures no longer square a rectangle");
     const auto currentShape = extractFunction(source, "Hyprexpo::SGridShape COverview::currentGridShape(");
     expectContains(currentShape, "return gridShape;", "every geometry consumer sees the resolved grid shape");
@@ -394,53 +395,29 @@ int main() {
     expect(overviewConstructor.find("for (int64_t id = minID; id <= maxID; ++id)") == std::string::npos,
            "dynamic workspace enumeration has no unbounded min-to-max fill loop");
 
-    const auto boundsScanPos = overviewConstructor.find("State::workspaceState()->workspacesCopy()", overviewConstructor.find("auto [methodCenter, methodStartID]"));
-    expect(boundsScanPos != std::string::npos,
-           "center-current bounds are always collected for traversal (skip-empty included, or the strip starts at the active workspace)");
-    expect(boundsScanPos != std::string::npos && overviewConstructor.find("!workspace", boundsScanPos) != std::string::npos,
-           "center-current bounds ignore null workspace entries");
-    expect(boundsScanPos != std::string::npos && overviewConstructor.find("workspace->m_isSpecialWorkspace", boundsScanPos) != std::string::npos,
-           "center-current bounds exclude special workspaces");
-    expect(boundsScanPos != std::string::npos && overviewConstructor.find("workspace->m_monitor != PMONITOR", boundsScanPos) != std::string::npos,
-           "center-current bounds exclude workspaces owned by other monitors");
+    const auto rangeScanPos = overviewConstructor.find("State::workspaceState()->workspacesCopy()");
+    expect(rangeScanPos != std::string::npos,
+           "the consecutive range scans live workspaces (nothing disappears)");
+    expect(rangeScanPos != std::string::npos && overviewConstructor.find("!workspace", rangeScanPos) != std::string::npos,
+           "range scan ignores null workspace entries");
+    expect(rangeScanPos != std::string::npos && overviewConstructor.find("workspace->m_isSpecialWorkspace", rangeScanPos) != std::string::npos,
+           "range scan excludes special workspaces");
+    expect(rangeScanPos != std::string::npos && overviewConstructor.find("workspace->m_id < 1", rangeScanPos) != std::string::npos,
+           "range scan only counts positive IDs from one upward");
+    expect(overviewConstructor.find("if (workspace->getWindowCount() > 0)") != std::string::npos,
+           "trailing dead empties don't extend the range: only occupied workspaces raise the ceiling");
 
-    const auto cappedBranchStart = overviewConstructor.find("if (!skipEmpty && maxWorkspace > 0)");
-    const auto centerBranchStart = overviewConstructor.find("if (methodCenter) {");
-    const auto centerBranchEnd   = overviewConstructor.find("\n    } else {", centerBranchStart);
-    const auto cappedBranch      = extractFunction(overviewConstructor, "if (!skipEmpty && maxWorkspace > 0) {");
-    const auto centerBranch      = centerBranchStart == std::string::npos || centerBranchEnd == std::string::npos ? std::string{} :
-                                                                                                                    overviewConstructor.substr(centerBranchStart, centerBranchEnd - centerBranchStart);
-    expect(!cappedBranch.empty(), "capped regular-grid branch exists");
-    expect(cappedBranchStart > centerBranchEnd && cappedBranchStart < overviewConstructor.find("if (dynamicGrid)"),
-           "the cap filters completed monitor-aware traversal before dynamic-grid overrides");
-    expect(cappedBranch.find("image.workspaceID > maxWorkspace") != std::string::npos && cappedBranch.find("image.workspaceID = WORKSPACE_INVALID") != std::string::npos,
-           "the cap invalidates only emitted IDs above the maximum");
-    expect(overviewConstructor.find("maxWorkspace - tileCount + 1") == std::string::npos,
-           "max_workspace no longer back-clamps the configured monitor anchor");
-    expect(!centerBranch.empty(), "center-current traversal branch exists");
-    const auto anchorPos = overviewConstructor.find("pMonitor->m_activeWorkspace = PWORKSPACESTART;");
-    const auto restoreAnchorPos = overviewConstructor.find("pMonitor->m_activeWorkspace = startedOn;", centerBranchEnd);
-    expect(anchorPos != std::string::npos && anchorPos < centerBranchStart && restoreAnchorPos < cappedBranchStart,
-           "explicit first and capped center selectors share a temporary anchor restored before capture");
-    expect(overviewConstructor.find("!methodCenter || (!skipEmpty && maxWorkspace > 0 && methodStartID != startedOn->m_id)") != std::string::npos,
-           "capped explicit centers anchor relative traversal without changing legacy skip-empty centering");
-
-    const auto helperPos = centerBranch.find("Hyprexpo::centeredWorkspaceBacktrack(");
-    expect(helperPos != std::string::npos && boundsScanPos != std::string::npos && boundsScanPos < centerBranchStart + helperPos,
-           "center-current traversal uses the pure backtrack helper after collecting bounds");
-    const auto ruleScanPos = overviewConstructor.find("Config::workspaceRuleMgr()->getAllWorkspaceRules()", boundsScanPos);
-    expect(boundsScanPos != std::string::npos && ruleScanPos != std::string::npos && ruleScanPos < centerBranchStart + helperPos,
-           "center-current bounds include workspace IDs reserved for the monitor by workspace rules before backtracking");
-    expect(ruleScanPos != std::string::npos && overviewConstructor.find("rule->isEnabled()", ruleScanPos) < centerBranchStart + helperPos,
-           "disabled workspace rules reserve no center-current bounds");
-    expect(ruleScanPos != std::string::npos && overviewConstructor.find("configString(rule->m_monitor)", ruleScanPos) < centerBranchStart + helperPos,
-           "reserved bounds resolve rule monitors through Hyprland's monitor query like its own selector");
-    expect(ruleScanPos != std::string::npos && overviewConstructor.find("Hyprexpo::workspaceRuleIDRange(rule->m_workspaceString)", ruleScanPos) < centerBranchStart + helperPos,
-           "reserved bounds parse rule workspace strings through the pure helper");
-    expect(centerBranch.find("for (size_t i = 1; i <= backtrackTarget; ++i)") != std::string::npos,
-           "center-current lower scan includes the full helper target");
-    expect(centerBranch.find("if (currentID >= firstID)") != std::string::npos && centerBranch.find("if (i > 0 && currentID <= firstID)") != std::string::npos,
-           "skip-empty center traversal retains lower and forward wrap guards");
+    // The sliding window is gone: no methods, anchors, caps, or backtrack.
+    expect(overviewConstructor.find("methodCenter") == std::string::npos, "no method branching in provisioning");
+    expect(overviewConstructor.find("getWorkspaceMethodForMonitor") == std::string::npos, "no method resolution in provisioning");
+    expect(overviewConstructor.find("backtrackTarget") == std::string::npos, "no backtrack window in provisioning");
+    expect(overviewConstructor.find("anchorSelector") == std::string::npos, "no temporary monitor anchor in provisioning");
+    expect(overviewConstructor.find("maxWorkspace - tileCount") == std::string::npos, "no cap back-clamp in provisioning");
+    expect(overviewConstructor.find("PWORKSPACESTART") == std::string::npos, "no synthetic anchor workspace in provisioning");
+    expect(overviewConstructor.find("Config::workspaceRuleMgr()->getAllWorkspaceRules()") == std::string::npos,
+           "no rule-reserved bounds in provisioning");
+    expect(overviewConstructor.find("Hyprexpo::centeredWorkspaceBacktrack(") == std::string::npos,
+           "no backtrack helper in provisioning");
 
     const auto renderSource = readFile("src/OverviewRender.cpp");
     expect(!renderSource.empty(), "src/OverviewRender.cpp can be read from repo root");
@@ -448,8 +425,8 @@ int main() {
     expect(!closeOverview.empty(), "overview close function exists");
     expect(closeOverview.find("resetSubmapIfNeeded();") != std::string::npos,
            "normal overview close restores the captured submap");
-    expect(overviewConstructor.find("emptyTilesSelectable = skipEmpty;") != std::string::npos,
-           "empty tile creation policy is captured when the overview is built");
+    expect(overviewConstructor.find("emptyTilesSelectable = false;") != std::string::npos,
+           "every consecutive tile names a real ID, so no empty-tile policy applies");
     expect(closeOverview.find("TILE.workspaceID != WORKSPACE_INVALID || emptyTilesSelectable") != std::string::npos,
            "all close inputs reject capped padding while preserving skip-empty creation tiles");
     expect(closeOverview.find("Desktop::focusState()->monitor() != MON") != std::string::npos,
@@ -467,8 +444,9 @@ int main() {
     const auto selectorHelper = extractFunction(source, "WORKSPACEID workspaceIDForMonitor(");
     expect(selectorHelper.find("CScopeGuard") != std::string::npos && selectorHelper.find("FOCUS->m_focusMonitor = previousMonitor;") != std::string::npos,
            "monitor-relative enumeration restores the focus context on every return");
-    expect(overviewConstructor.find("getWorkspaceIDNameFromString(") == std::string::npos && overviewConstructor.find("workspaceIDForMonitor(PMONITOR,") != std::string::npos,
-           "simultaneous grids do not enumerate through another monitor's focus context");
+    expect(overviewConstructor.find("getWorkspaceIDNameFromString(") == std::string::npos &&
+               overviewConstructor.find("workspaceIDForMonitor(PMONITOR,") == std::string::npos,
+           "consecutive provisioning resolves no selectors: simultaneous grids never touch another monitor's focus context");
 
     // An anchored grid (workspace_method "<output> first N") lays out
     // max_workspace slots whether or not those workspaces exist. Selecting a

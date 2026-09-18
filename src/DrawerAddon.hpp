@@ -43,7 +43,7 @@ class CDrawerAddon final : public Hyprexpo::Addon::IOverviewAddon {
     void updateHover(const Vector2D& local) override;
 
     void touchDown(const Vector2D& local) override;
-    void touchMotion(double dy) override;
+    void touchMotion(double dy, double pressDist) override;
     void touchUp(const Vector2D& upLocal, const Vector2D& pressDelta) override;
     void touchCancel() override;
 
@@ -87,6 +87,14 @@ class CDrawerAddon final : public Hyprexpo::Addon::IOverviewAddon {
         // while a finger is physically down (resting fingers send no
         // motion events to refresh the idle clock).
         bool touchDownActive = false;
+        // List fling (touch inertia): scroll-space velocity + trailing
+        // motion samples for release-slope measurement.
+        double flingVel = 0.0;
+        double velCumY  = 0.0;
+        static constexpr int VEL_SAMPLES = 8;
+        double velT[VEL_SAMPLES] = {};
+        double velY[VEL_SAMPLES] = {};
+        int    velCount          = 0;
     };
     State state;
 
@@ -113,15 +121,19 @@ class CDrawerAddon final : public Hyprexpo::Addon::IOverviewAddon {
     void   endDrag(bool commit = true);
     void   commitPull(bool open, double span);
     void   pushVisual(double delta, double lo, double hi);
-    bool   pushPast(double wall, bool open, double span);
     double pullStamp();
     double listScroll(double fingerDy);
     void   setFitted(bool fitted);
+    // Release slope over the trailing motion window (finger-space px/s).
+    double releaseVelocity(double now);
+    // Starts list inertia when the release qualifies; no-op otherwise.
+    void maybeStartFling();
 
     // --- model glue ---
     void refilter();
     void tap(const Vector2D& local);
     void launch(size_t orderIdx);
+    bool focusIfOpen(const Hyprexpo::Drawer::SApp& app);
     void typeText(const std::string& text);
     void backspace();
     void clearQuery();
