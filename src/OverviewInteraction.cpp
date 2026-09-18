@@ -434,11 +434,10 @@ void COverview::touchPressMotion(int32_t touchID, const Vector2D& global) {
     touchPress.lastGlobal = global;
     if (touchPress.region == (int)ERegion::Grid) {
         // Vertical finger motion pulls the drawer (release decides
-        // open vs snap-back). Close permission was latched at press
-        // from the scroll position; pass only the displacement.
-        drawer.touchMotion(dy);
-        if (const auto MON = touchPress.monitor.lock())
-            drawer.updateHover(global - MON->m_position);
+        // open vs snap-back, with fling on fast scroll releases).
+        // Close permission was latched at press from the scroll position;
+        // pass displacement plus total travel (highlight dies past slop).
+        drawer.touchMotion(dy, std::hypot(global.x - touchPress.downGlobal.x, global.y - touchPress.downGlobal.y));
         return;
     }
     if (touchPress.region != (int)ERegion::Ribbon)

@@ -5,6 +5,8 @@
 #include <algorithm>
 #include <cctype>
 #include <cstdlib>
+#include <cstring>
+#include <dlfcn.h>
 #include <filesystem>
 #include <fstream>
 #include <sstream>
@@ -105,7 +107,47 @@ std::string localizedValue(const std::map<std::string, std::string>& m, const st
     return it != m.end() ? it->second : "";
 }
 
-// First whitespace-separated token of a TryExec/Exec line.
+// Flatpak app id from `flatpak run [flags] <appid> ...`, for window
+// class matching (the exec basename is always just "flatpak").
+std::string flatpakAppId(const std::string& exec) {
+    std::istringstream in(exec);
+    std::string tok;
+    bool seenRun = false;
+    while (in >> tok) {
+        std::string base = tok;
+        const auto slash = base.find_last_of('/');
+        if (slash != std::string::npos)
+            base = base.substr(slash + 1);
+        if (!seenRun) {
+            if (base == "flatpak")
+                seenRun = true;
+            continue;
+        }
+        if (tok == "run")
+            continue;
+        if (!tok.empty() && tok[0] == '-') {
+            // Only --command takes a separate value; every other bare flag
+            // (e.g. --file-forwarding) is boolean and the app id follows.
+            if (tok == "--command")
+                in >> tok;
+            continue;
+        }
+        return tok;
+    }
+    return "";
+}
+
+// Single-quote a shell word.
+std::string shellQuote(const std::string& s) {
+    std::string out = "'";
+    for (char c : s) {
+        if (c == '\'')
+            out += "'\\''";
+        else
+            out += c;
+    }
+    return out + "'";
+}
 std::string firstToken(const std::string& s) {
     std::istringstream in(s);
     std::string tok;
@@ -139,7 +181,9 @@ bool truthy(const std::map<std::string, std::string>& m, const std::string& key)
     return it != m.end() && (it->second == "true" || it->second == "1");
 }
 
-// Strip freedesktop Exec field codes (%u %U %f %F %i %c %k %d %D %n %N %v %m).
+// Strip freedesktop Exec field codes (%u %U %f %F %i %c %k %d %D %n %N %v %m)
+// and flatpak file-forwarding placeholders (@@u @@f ...): with no files to
+// forward they make the launch fail silently.
 std::string cleanExec(const std::string& exec) {
     std::ostringstream out;
     bool first = true;
@@ -147,6 +191,8 @@ std::string cleanExec(const std::string& exec) {
     std::string tok;
     while (in >> tok) {
         if (tok.size() == 2 && tok[0] == '%' && std::isalpha((unsigned char)tok[1]))
+            continue;
+        if (tok.size() >= 2 && tok[0] == '@' && tok[1] == '@')
             continue;
         if (!first)
             out << ' ';
@@ -157,6 +203,21 @@ std::string cleanExec(const std::string& exec) {
 }
 
 } // namespace
+
+// librsvg is an optional RUNTIME dependency (dlopen, never linked): the
+// raster side lives in the addon, but discovery prefers .svg up front so a
+// scalable master beats an upscaled bitmap. Absent library -> PNG/XPM only,
+// exactly like before.
+bool haveSvgLoader() {
+    static int cached = -1;
+    if (cached < 0) {
+        void* handle = dlopen("librsvg-2.so.2", RTLD_LAZY | RTLD_LOCAL);
+        cached       = handle ? 1 : 0;
+        if (handle)
+            dlclose(handle);
+    }
+    return cached > 0;
+}
 
 std::string lowerFold(const std::string& in) {
     std::string out = in;
@@ -214,6 +275,11 @@ std::vector<SApp> scanApps() {
                 continue;
             app.name = name;
             app.exec = cleanExec(execIt->second);
+            const auto wmClass = kv.find("StartupWMClass");
+            app.startupWmClass = (wmClass != kv.end()) ? wmClass->second : "";
+            app.flatpakAppId   = flatpakAppId(execIt->second);
+            const auto workdir = kv.find("Path");
+            app.workingDir      = (workdir != kv.end()) ? workdir->second : "";
             const auto icon = kv.find("Icon");
             app.icon = (icon != kv.end()) ? icon->second : "";
             app.terminal = truthy(kv, "Terminal");
@@ -342,36 +408,110 @@ std::string resolveIconPath(const std::string& icon, int minPx) {
         std::error_code ec;
         return fs::is_regular_file(icon, ec) ? icon : "";
     }
+    // Icon roots mirror the app search dirs (<prefix>/applications sits
+    // next to <prefix>/icons), so user themes, system themes, /usr/local
+    // and flatpak exports (system + user) are all covered without
+    // hardcoding. Plus legacy ~/.icons.
     std::vector<std::string> roots;
-    if (const char* home = getenv("HOME")) {
-        roots.push_back(std::string(home) + "/.local/share/icons");
-        roots.push_back(std::string(home) + "/.icons");
+    auto addRoot = [&](const std::string& r) {
+        if (!r.empty() && std::none_of(roots.begin(), roots.end(), [&](const std::string& u) { return u == r; }))
+            roots.push_back(r);
+    };
+    for (const auto& dir : appSearchDirs()) {
+        static const std::string suffix = "/applications";
+        if (dir.size() > suffix.size() && dir.compare(dir.size() - suffix.size(), suffix.size(), suffix) == 0) {
+            const std::string base = dir.substr(0, dir.size() - suffix.size());
+            addRoot(base + "/icons");
+            addRoot(base + "/pixmaps");
+        }
     }
-    roots.push_back("/usr/share/icons");
-    roots.push_back("/usr/share/pixmaps");
+    if (const char* home = getenv("HOME")) {
+        addRoot(std::string(home) + "/.icons");
+        addRoot(std::string(home) + "/.local/share/flatpak/exports/share/icons");
+    }
+    addRoot("/var/lib/flatpak/exports/share/icons");
+    // Some files carry their extension; try verbatim first, then themed.
+    std::string stem = icon;
+    for (const char* ext : {".png", ".xpm", ".svg"}) {
+        const size_t len = strlen(ext);
+        if (stem.size() > len && stem.compare(stem.size() - len, len, ext) == 0) {
+            for (const auto& root : roots) {
+                std::error_code ec;
+                if (fs::is_regular_file(root + "/" + icon, ec))
+                    return root + "/" + icon;
+            }
+            stem = stem.substr(0, stem.size() - len);
+            break;
+        }
+    }
     static const int SIZES[] = {128, 96, 72, 64, 48, 32, 256, 512, 24, 16};
-    // largest-first that still meets minPx, so touch tiles stay crisp
-    for (int want : SIZES) {
-        if (want < minPx)
-            continue;
-        const std::string sub = std::to_string(want) + "x" + std::to_string(want);
+    static const char* THEMES[] = {"hicolor", "Adwaita", "gnome", "AdwaitaLegacy", "oxygen"};
+    // SVG masters first: infinite scale beats any bitmap (needs the
+    // runtime loader; otherwise these simply miss and PNGs win).
+    if (haveSvgLoader()) {
         for (const auto& root : roots) {
-            for (const auto& theme : {"hicolor", "Adwaita", "gnome"}) {
-                for (const auto& ext : {".png", ".xpm"}) {
-                    const std::string p = root + "/" + theme + "/" + sub + "/apps/" + icon + ext;
-                    std::error_code ec;
-                    if (fs::is_regular_file(p, ec))
-                        return p;
-                }
+            for (const auto& theme : THEMES) {
+                const std::string p = root + "/" + theme + "/scalable/apps/" + stem + ".svg";
+                std::error_code ec;
+                if (fs::is_regular_file(p, ec))
+                    return p;
             }
         }
     }
+    auto themedAt = [&](int want, const std::string& stem, std::string& out) {
+        const std::string sub = std::to_string(want) + "x" + std::to_string(want);
+        for (const auto& root : roots) {
+            for (const auto& theme : THEMES) {
+                for (const auto& ext : {".png", ".xpm"}) {
+                    const std::string p = root + "/" + theme + "/" + sub + "/apps/" + stem + ext;
+                    std::error_code ec;
+                    if (fs::is_regular_file(p, ec)) {
+                        out = p;
+                        return true;
+                    }
+                }
+            }
+        }
+        return false;
+    };
+    std::string found;
+    // largest-first that still meets minPx, so touch tiles stay crisp...
+    for (int want : SIZES) {
+        if (want < minPx)
+            continue;
+        if (themedAt(want, stem, found))
+            return found;
+    }
+    // ...then largest-first below it: an upscaled small icon still beats
+    // a letter tile (e.g. Steam ships 32px only). SVG-only apps stay on
+    // the glyph fallback: no rasterizer on this box by design.
+    for (int want : SIZES) {
+        if (want >= minPx)
+            continue;
+        if (themedAt(want, stem, found))
+            return found;
+    }
+    // Loose files directly under the roots (pixmaps-style drop-ins).
+    const std::vector<std::string> looseExts =
+        haveSvgLoader() ? std::vector<std::string>{".png", ".xpm", ".svg"} : std::vector<std::string>{".png", ".xpm"};
     for (const auto& root : roots) {
-        for (const auto& ext : {".png", ".xpm"}) {
-            const std::string p = root + "/" + icon + ext;
+        for (const auto& ext : looseExts) {
+            const std::string p = root + "/" + stem + ext;
             std::error_code ec;
             if (fs::is_regular_file(p, ec))
                 return p;
+        }
+    }
+    // AdwaitaLegacy keeps app icons one level deeper (legacy/).
+    for (const auto& root : roots) {
+        for (int want : SIZES) {
+            const std::string sub = std::to_string(want) + "x" + std::to_string(want);
+            for (const auto& ext : {".png", ".xpm"}) {
+                const std::string p = root + "/AdwaitaLegacy/" + sub + "/legacy/" + stem + ext;
+                std::error_code ec;
+                if (fs::is_regular_file(p, ec))
+                    return p;
+            }
         }
     }
     return "";
@@ -401,6 +541,10 @@ void launchApp(const SApp& app) {
     std::string cmd = app.exec;
     if (app.terminal)
         cmd = terminalWrap(cmd);
+    // Honor Path=: CWD-dependent launchers (wine/proton wrappers) fail
+    // silently from the compositor's working directory otherwise.
+    if (!app.workingDir.empty())
+        cmd = "cd " + shellQuote(app.workingDir) + " && " + cmd;
     std::system(("(" + cmd + ") >/dev/null 2>&1 &").c_str());
 }
 
