@@ -813,6 +813,55 @@ int main() {
     expect(centeredWorkspaceBacktrack(9, std::numeric_limits<int64_t>::max(), std::numeric_limits<int64_t>::min(), std::numeric_limits<int64_t>::max()) == 8,
            "center-current handles the full signed workspace range without overflow");
 
+    // Ribbon strip: deterministic 16:10 slots, tile size from cols, row from count.
+    {
+        using Hyprexpo::Ribbon::layoutStrip;
+        using Hyprexpo::Ribbon::slotIndexAtPoint;
+        const auto fit = layoutStrip(1280.0, 720.0, 3, 3, 20.0, 20.0, 64.0, 128.0, 0.0, 1.0);
+        expect(near(fit.tileW, 386.666, 0.01), "ribbon tile width shares the output among columns");
+        expect(near(fit.tileH, fit.tileW * 10.0 / 16.0, 0.001), "ribbon tiles keep 16:10");
+        expect(fit.maxScroll == 0.0, "fitting strip has no pan range");
+        expect(near(fit.x0, 20.0, 0.01), "fitting strip centers");
+        expect(near(fit.y0, 129.166, 0.01), "ribbon row centers above the search strip");
+
+        const auto wide = layoutStrip(1280.0, 720.0, 3, 3, 20.0, 20.0, 64.0, 128.0, 0.0, 1.5);
+        expect(near(wide.tileW, 580.0, 0.01), "ribbon scale multiplies the slot size");
+        expect(near(wide.maxScroll, 580.0, 0.01), "overflowing strip pans the overflow");
+        expect(near(wide.x0, 20.0, 0.01), "unscrolled strip starts at the outer inset");
+        const auto scrolled = layoutStrip(1280.0, 720.0, 3, 3, 20.0, 20.0, 64.0, 128.0, 580.0, 1.5);
+        expect(near(scrolled.x0, -560.0, 0.01), "scrolled strip shifts by the pan offset");
+        const auto clamped = layoutStrip(1280.0, 720.0, 3, 3, 20.0, 20.0, 64.0, 128.0, 9999.0, 1.5);
+        expect(near(clamped.x0, -560.0, 0.01), "pan offset clamps to the range end");
+
+        expect(slotIndexAtPoint(300.0, 10.0, wide, 20.0, 3) == 0, "strip hit test finds the first slot");
+        expect(slotIndexAtPoint(930.0, 10.0, wide, 20.0, 3) == 1, "strip hit test finds the second slot");
+        expect(slotIndexAtPoint(615.0, 10.0, wide, 20.0, 3) == -1, "strip gaps are unhittable");
+        expect(slotIndexAtPoint(300.0, -1.0, wide, 20.0, 3) == -1, "strip rejects points above");
+        expect(slotIndexAtPoint(300.0, wide.tileH, wide, 20.0, 3) == -1, "strip rejects points below");
+        expect(slotIndexAtPoint(5000.0, 10.0, wide, 20.0, 3) == -1, "strip rejects points past the end");
+    }
+
+    // OSK layer matching: configured hit, dual-space hit, first-detect learn.
+    {
+        using Hyprexpo::Osk::scanLayers;
+        using Hyprexpo::Osk::SLayerCandidate;
+        const std::vector<SLayerCandidate> layers = {{"wvkbd", 40.0, 1100.0, 2120.0, 250.0}, {"waybar", 0.0, 0.0, 2120.0, 36.0}};
+        const auto hit = scanLayers({"wvkbd"}, {}, layers, 2120.0, 1350.0, 500.0, 1200.0, 500.0, 1200.0);
+        expect(hit.hit && hit.learnedNs.empty(), "listed keyboard layer hits");
+        const auto miss = scanLayers({"wvkbd"}, {}, layers, 2120.0, 1350.0, 500.0, 500.0, 500.0, 500.0);
+        expect(!miss.hit && miss.learnedNs.empty(), "listed keyboard misses elsewhere without learning");
+        const auto local = scanLayers({"wvkbd"}, {}, layers, 2120.0, 1350.0, 5000.0, 5000.0, 500.0, 1200.0);
+        expect(local.hit, "monitor-local point hits when geometry is local");
+        const auto learn = scanLayers({}, {}, layers, 2120.0, 1350.0, 500.0, 1200.0, 500.0, 1200.0);
+        expect(learn.hit && learn.learnedNs == "wvkbd", "unlisted keyboard fills on first detect");
+        const auto thin = scanLayers({}, {}, {{"tiny", 0.0, 0.0, 100.0, 30.0}}, 2120.0, 1350.0, 50.0, 15.0, 50.0, 15.0);
+        expect(!thin.hit && thin.learnedNs.empty(), "small layers never adopted");
+        const auto empty = scanLayers({}, {}, {{"", 0.0, 1000.0, 2120.0, 250.0}}, 2120.0, 1350.0, 500.0, 1200.0, 500.0, 1200.0);
+        expect(!empty.hit && empty.learnedNs.empty(), "nameless layers never adopted");
+        const auto remembered = scanLayers({}, {"wvkbd"}, layers, 2120.0, 1350.0, 500.0, 1200.0, 500.0, 1200.0);
+        expect(remembered.hit && remembered.learnedNs.empty(), "learned namespaces hit without relearning");
+    }
+
     // Issue #133: a monitor whose range starts above 1 keeps its rule-reserved floor even
     // when the lowest workspace is currently empty and therefore does not exist.
     expect(workspaceRuleIDRange("11") == std::optional<SWorkspaceIDRange>{{11, 11}}, "numeric workspace rules reserve a single ID");

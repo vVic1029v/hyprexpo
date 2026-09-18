@@ -11,6 +11,7 @@
 #include "Drawer.hpp"
 #include "globals.hpp"
 #include "IOverviewSession.hpp"
+#include "Overview.hpp"
 #include "OverviewCapture.hpp"
 #include "PluginConfig.hpp"
 #include <stdexcept>
@@ -129,9 +130,11 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
     static auto PKEY = Event::bus()->m_events.input.keyboard.key.listen([](IKeyboard::SKeyEvent event, Event::SCallbackInfo& info) {
         // Drawer search eats printable/editing keys while focused (digits
         // included: they filter instead of workspace-jumping).
-        if (Hyprexpo::Drawer::drawerSearchKey(event)) {
-            info.cancelled = true;
-            return;
+        if (auto* const OV = dynamic_cast<COverview*>(activeOverview())) {
+            if (!OV->closeCommitted() && OV->drawer.searchKey(event)) {
+                info.cancelled = true;
+                return;
+            }
         }
         if (shouldCancelOverview(event)) {
             info.cancelled = true;

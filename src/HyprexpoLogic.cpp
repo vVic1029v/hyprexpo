@@ -790,4 +790,88 @@ SWorkspaceMethodSpec resolveWorkspaceMethodForMonitor(const std::string& config,
     return invalid;
 }
 
+namespace Ribbon {
+
+SStrip layoutStrip(double totalW, double totalH, int cols, int count, double gap, double outer, double searchH, double rowH, double scrollX,
+                   double scale) {
+    SStrip out;
+    if (cols < 1)
+        cols = 1;
+    if (count < 1)
+        count = 1;
+    if (!(scale > 0.0))
+        scale = 1.0;
+    const double rgap = gap * GAP_MULTIPLIER;
+    out.tileW         = std::max(1.0, (totalW - 2.0 * outer - (double)(cols - 1) * rgap) / (double)cols) * scale;
+    out.tileH         = out.tileW * TILE_ASPECT_H / TILE_ASPECT_W;
+    out.rowW          = (double)count * out.tileW + (double)(count - 1) * rgap;
+    out.maxScroll     = out.rowW <= totalW ? 0.0 : out.rowW - (totalW - 2.0 * outer);
+    if (out.maxScroll <= 0.0)
+        out.x0 = (totalW - out.rowW) / 2.0;
+    else
+        out.x0 = outer - std::clamp(scrollX, 0.0, out.maxScroll);
+    const double availH = totalH - 16.0 - rowH - 12.0 - searchH; // above docked search
+    out.y0              = std::max(outer, (availH - out.tileH) / 2.0);
+    return out;
+}
+
+int slotIndexAtPoint(double lx, double ly, const SStrip& strip, double gap, int count) {
+    if (count < 1)
+        count = 1;
+    const double pitch = strip.tileW + gap * GAP_MULTIPLIER;
+    if (lx < 0 || ly < 0 || ly >= strip.tileH || pitch <= 0.0)
+        return -1;
+    const int slot = (int)(lx / pitch);
+    if (slot < 0 || slot >= count)
+        return -1;
+    if (lx - (double)slot * pitch > strip.tileW)
+        return -1;
+    return slot;
+}
+
+} // namespace Ribbon
+
+namespace Osk {
+
+namespace {
+
+bool containsPoint(double bx, double by, double bw, double bh, double px, double py) {
+    return bw > 0.0 && bh > 0.0 && px >= bx && py >= by && px < bx + bw && py < by + bh;
+}
+
+bool boxHitsBothSpaces(const SLayerCandidate& layer, double gx, double gy, double lx, double ly) {
+    return containsPoint(layer.x, layer.y, layer.w, layer.h, gx, gy) || containsPoint(layer.x, layer.y, layer.w, layer.h, lx, ly);
+}
+
+bool isListed(const std::vector<std::string>& configured, const std::vector<std::string>& learned, const std::string& ns) {
+    return std::find(configured.begin(), configured.end(), ns) != configured.end() ||
+           std::find(learned.begin(), learned.end(), ns) != learned.end();
+}
+
+bool isKeyboardShaped(const SLayerCandidate& layer, double monW, double monH) {
+    return !layer.ns.empty() && layer.w >= 0.5 * monW && layer.h >= 80.0 && layer.h <= 0.6 * monH;
+}
+
+} // namespace
+
+SScanResult scanLayers(const std::vector<std::string>& configured, const std::vector<std::string>& learned,
+                       const std::vector<SLayerCandidate>& layers, double monW, double monH, double gx, double gy, double lx, double ly) {
+    SScanResult out;
+    for (const auto& layer : layers) {
+        if (isListed(configured, learned, layer.ns)) {
+            if (boxHitsBothSpaces(layer, gx, gy, lx, ly))
+                out.hit = true;
+            continue;
+        }
+        if (out.learnedNs.empty() && isKeyboardShaped(layer, monW, monH)) {
+            out.learnedNs = layer.ns;
+            if (boxHitsBothSpaces(layer, gx, gy, lx, ly))
+                out.hit = true;
+        }
+    }
+    return out;
+}
+
+} // namespace Osk
+
 }
