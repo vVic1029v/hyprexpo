@@ -394,10 +394,9 @@ int main() {
     expect(overviewConstructor.find("for (int64_t id = minID; id <= maxID; ++id)") == std::string::npos,
            "dynamic workspace enumeration has no unbounded min-to-max fill loop");
 
-    const auto boundsGatePos = overviewConstructor.find("if (!skipEmpty)", overviewConstructor.find("auto [methodCenter, methodStartID]"));
-    const auto boundsScanPos = overviewConstructor.find("State::workspaceState()->workspacesCopy()", boundsGatePos);
-    expect(boundsGatePos != std::string::npos && boundsScanPos != std::string::npos && boundsGatePos < boundsScanPos,
-           "regular workspace bounds are collected only for consecutive traversal");
+    const auto boundsScanPos = overviewConstructor.find("State::workspaceState()->workspacesCopy()", overviewConstructor.find("auto [methodCenter, methodStartID]"));
+    expect(boundsScanPos != std::string::npos,
+           "center-current bounds are always collected for traversal (skip-empty included, or the strip starts at the active workspace)");
     expect(boundsScanPos != std::string::npos && overviewConstructor.find("!workspace", boundsScanPos) != std::string::npos,
            "center-current bounds ignore null workspace entries");
     expect(boundsScanPos != std::string::npos && overviewConstructor.find("workspace->m_isSpecialWorkspace", boundsScanPos) != std::string::npos,

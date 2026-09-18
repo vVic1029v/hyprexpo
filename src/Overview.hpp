@@ -120,6 +120,7 @@ class COverview final : public IOverviewSession {
     int        tileIndexAtPoint(const Vector2D& point, const Vector2D& totalSize, double gap, double outerInset = 0.0, bool centerPartialRows = true) const;
     Vector2D   tilePosForID(int id, const Vector2D& totalSize, double gap, double outerInset = 0.0, bool centerPartialRows = true) const;
     Vector2D   zoomSizeForCurrentGrid(const Vector2D& monitorSize) const;
+    Vector2D   zoomPosForTile(int id, const Vector2D& canvasSize) const;
     void       updateHoveredFromMouse();
     void       ensureKbFocusInitialized();
     bool       isTileValid(int id) const;
@@ -139,7 +140,10 @@ class COverview final : public IOverviewSession {
         float       anim         = 0.f;    // 0 docked -> 1 fitted, stepped per frame
         double      lastStepS    = 0.0;    // last anim step timestamp (0 = unset)
         double      scroll       = 0.0;    // content scroll px (fitted only)
-        double      pull         = 0.0;    // expand/collapse drag accumulator px
+        double      lastPullS    = 0.0;    // last pull input (any source); snap-back runs past idle
+        double      pullVisual   = 0.0;    // live sheet offset px, follows the push
+        bool        pulling      = false;  // a pull drag is in flight
+        bool        pullEngaged  = false;  // latched at press: may commit open/close
         bool        scanned      = false;  // app model scanned for this open
         int         hoverApp     = -1;     // filtered-list index under pointer
         bool        searchFocused = false;
@@ -147,8 +151,9 @@ class COverview final : public IOverviewSession {
         bool        queryDirty   = true;
         // model (rescanned per overview open) + texture caches (cleared on close)
         std::vector<Hyprexpo::Drawer::SApp>      apps;
-        std::vector<std::string>                 pins;
-        std::vector<size_t>                      order;
+        std::vector<std::string>                 recent;     // launch history, most-recent-first
+        std::vector<size_t>                      order;      // positions (EMPTY_SLOT = recent-row hole)
+        int                                      recentShown = 0; // leading recent tiles in order
         std::map<std::string, SP<Render::ITexture>> iconTex;
         std::map<std::string, SP<Render::ITexture>> labelTex;
         SP<Render::ITexture>                       searchTex;
@@ -164,9 +169,16 @@ class COverview final : public IOverviewSession {
     // math flows through tileBoxForIndex/tileIndexAtPoint, so every consumer
     // (render, hover, drag, labels, damage) follows automatically.
     double     ribbonH() const;
+    int        ribbonCount() const; // pannable slots: trailing-trimmed valid tiles
+    double     ribbonMaxScroll() const; // pan range px (0 when the strip fits)
+    void       ribbonScrollBy(double deltaPx); // wheel: content moves against delta
+    void       ribbonPanBy(double fingerDx);   // touch: content follows the finger
+    void       ribbonScrollToWorkspace(int wsid); // center the tile (open-time)
     double     searchH() const;
     double     searchTop() const;   // y where the search strip starts
-    double     drawerTop() const;   // y where the app grid starts
+    double     drawerTop() const;   // y where the app grid starts (incl. live pull)
+    double     drawerPullSpan() const; // full docked<->fitted travel px
+    double     drawerPullThreshold() const; // commit travel: quarter screen (config floor)
     ERegion    regionAtPoint(const Vector2D& local) const;
     // Drawer grid geometry + hit test (index into drawer.order, -1 none).
     int        drawerCols() const;
@@ -176,14 +188,20 @@ class COverview final : public IOverviewSession {
     double     drawerContentH() const;
     double     drawerMaxScroll() const;
     int        drawerAppAt(const Vector2D& local) const;
+    bool       drawerRecentPad() const; // padded gap after the recent row
     CBox       drawerTileBox(int orderIdx) const;
     void       drawerRescan();
     void       drawerRefilter();
     void       drawerClearCaches();
     void       drawerSetFitted(bool fitted);
-    void       drawerScrollBy(double dy);
-    void       drawerTap(const Vector2D& local, bool rightClick);
-    void       drawerTogglePin(size_t orderIdx);
+    void       drawerScrollBy(double fingerDy); // wheel/touchpad: visual pull + detent, idle snap-back
+    void       drawerPullBegin();               // Grid press: latch close permission from scroll pos
+    void       drawerPullBy(double fingerDy);   // mouse/touch drag: follows finger
+    void       drawerDragEnd(bool commit = true); // release: commit or snap back
+    void       commitDrawerPull(bool open, double span); // shared commit, seeds anim from live pos
+    double     drawerPullStamp(); // note pull-input time, returns now (seconds)
+    double     drawerListScroll(double fingerDy); // scroll list, returns overshoot past top
+    void       drawerTap(const Vector2D& local);
     void       drawerLaunch(size_t orderIdx);
     void       drawerTypeText(const std::string& text);
     void       drawerBackspace();
@@ -207,9 +225,9 @@ class COverview final : public IOverviewSession {
         Vector2D            downGlobal{};
         Vector2D            lastGlobal{};
         bool                dragging = false;
+        bool                ribbonPanning = false; // horizontal swipe pans the ribbon
         int                 region   = 0; // EDrawerRegion, resolved at down
         int                 appIndex = -1;
-        bool                pinConsumed = false;
         PHLMONITORREF       monitor;
         SP<CEventLoopTimer> holdTimer;
     };
@@ -241,11 +259,12 @@ class COverview final : public IOverviewSession {
     bool       emptyTilesSelectable = false;
     Hyprexpo::SGridShape gridShape{3, 3};
     int        GAP_WIDTH   = 5;
-    CHyprColor BG_COLOR    = CHyprColor{0.1, 0.1, 0.1, 1.0};
+    CHyprColor BG_COLOR    = CHyprColor{0.1, 0.1, 0.1, 0.0};
 
     bool       damageDirty = false;
 
     Vector2D                     lastMousePosLocal = Vector2D{};
+    double                       ribbonScrollX = 0.0; // horizontal pan offset px
 
     int                          openedID  = -1;
     int                          closeOnID = -1;

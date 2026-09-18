@@ -5,6 +5,7 @@
 // live in Drawer.{hpp,cpp} with no compositor dependency.
 #include "Overview.hpp"
 #include "OverviewInternal.hpp"
+#include "ConfigValues.hpp"
 #include "Drawer.hpp"
 
 #include <hyprland/src/Compositor.hpp>
@@ -32,39 +33,37 @@
 
 namespace {
 
-// getConfigValue can return null (key missing races plugin init on fresh
-// logins, and a null deref here once took down the whole compositor).
-// Every drawer lookup goes through here: safe defaults + one loud log.
-// Values stay live (no caching) so `hyprctl keyword` keeps working.
-int drawerInt(const char* key, int fallback) {
-    const auto* raw = HyprlandAPI::getConfigValue(PHANDLE, key);
-    if (!raw) {
-        Log::logger->log(Log::ERR, "[hyprexpo] drawer config key missing: {}", key);
-        return fallback;
-    }
-    auto* val = (Hyprlang::INT* const*)raw->getDataStaticPtr();
-    if (!val) {
-        Log::logger->log(Log::ERR, "[hyprexpo] drawer config value null: {}", key);
-        return fallback;
-    }
-    return (int)**val;
-}
+// Drawer tunables, read live through the config module (no caching, so
+// `hyprctl keyword` keeps working). Clamp here so geometry never inverts.
+using Hyprexpo::ConfigValues::getFloat;
+using Hyprexpo::ConfigValues::getInt;
 
 int drawerEnabled() {
-    return drawerInt("plugin:hyprexpo:drawer_enable", 1);
+    return getInt("plugin:hyprexpo:drawer_enable", 1);
 }
 int drawerCfgCols() {
-    return std::max(1, drawerInt("plugin:hyprexpo:drawer_columns", 5));
+    return std::max(1, getInt("plugin:hyprexpo:drawer_columns", 5));
 }
 int drawerCfgSearchH() {
-    return std::max(32, drawerInt("plugin:hyprexpo:drawer_search_h", 64));
+    return std::max(32, getInt("plugin:hyprexpo:drawer_search_h", 64));
 }
 int drawerCfgExpandPx() {
-    return std::max(20, drawerInt("plugin:hyprexpo:drawer_expand_px", 60));
+    return std::max(20, getInt("plugin:hyprexpo:drawer_expand_px", 60));
 }
 int drawerCfgIconPx() {
-    return std::max(32, drawerInt("plugin:hyprexpo:drawer_icon_px", 72));
+    return std::max(32, getInt("plugin:hyprexpo:drawer_icon_px", 72));
 }
+float drawerCfgResist() {
+    return std::clamp(getFloat("plugin:hyprexpo:drawer_resist", 0.25F), 0.0F, 1.0F);
+}
+// Rubber-band overshoot cap for deep (non-closing) pulls.
+constexpr double RESIST_CAP_PX = 28.0;
+// Breathing room between the recent row and the locked grid below it.
+constexpr double RECENT_PAD_PX = 20.0;
+// Wheel/touchpad detent: without a release event, a push must travel past
+// the threshold AND keep pushing against this wall to commit. Anything
+// shorter springs back on idle instead of toggling on a small flick.
+constexpr double COMMIT_OVERSHOOT_PX = 24.0;
 
 double smooth01(double t) {
     t = std::clamp(t, 0.0, 1.0);
@@ -86,21 +85,43 @@ double COverview::searchH() const {
 
 double COverview::searchTop() const {
     // Docked: strip sits just above the single bottom row. Fitted: top.
+    // The search strip is part of the sheet: it rides pullVisual exactly
+    // like the app grid below it.
     const auto MON = pMonitor.lock();
     const double H = MON ? MON->m_size.y : 0.0;
     const double dockedY = H - 16.0 - drawerRowH() - 12.0 - searchH();
     const double fittedY = 24.0;
-    return dockedY + (fittedY - dockedY) * smooth01(drawer.anim);
+    return dockedY + (fittedY - dockedY) * smooth01(drawer.anim) + drawer.pullVisual;
 }
 
 double COverview::drawerTop() const {
     // Docked: one pinned row pinned to the bottom edge (rest of the grid
     // lives below the screen and scrolls up into view when fitted).
+    // pullVisual shifts the sheet with the finger while a pull drag is
+    // in flight (or springing back); otherwise it is zero.
     const auto MON = pMonitor.lock();
     const double H = MON ? MON->m_size.y : 0.0;
     const double dockedY = H - 16.0 - drawerRowH();
     const double fittedY = 24.0 + searchH() + 16.0;
-    return dockedY + (fittedY - dockedY) * smooth01(drawer.anim);
+    return dockedY + (fittedY - dockedY) * smooth01(drawer.anim) + drawer.pullVisual;
+}
+
+// Full travel of the sheet between docked and fitted (always >= 0).
+double COverview::drawerPullSpan() const {
+    const auto MON = pMonitor.lock();
+    const double H = MON ? MON->m_size.y : 0.0;
+    const double dockedY = H - 16.0 - drawerRowH();
+    const double fittedY = 24.0 + searchH() + 16.0;
+    return std::max(0.0, dockedY - fittedY);
+}
+
+// Commit travel: a quarter of the screen height. A fixed 60px threshold
+// felt like ~20px of intent on touch; a pull only counts when it covers
+// real distance. drawer_expand_px remains as a floor for tiny outputs.
+double COverview::drawerPullThreshold() const {
+    const auto MON = pMonitor.lock();
+    const double H = MON ? MON->m_size.y : 0.0;
+    return std::max(H / 4.0, (double)drawerCfgExpandPx());
 }
 
 COverview::ERegion COverview::regionAtPoint(const Vector2D& local) const {
@@ -150,11 +171,20 @@ double COverview::drawerContentH() const {
     const size_t rows = (drawer.order.size() + (size_t)drawerCols() - 1) / (size_t)drawerCols();
     if (rows == 0)
         return 0.0;
-    return (double)rows * drawerRowH() + (double)(rows - 1) * 12.0;
+    return (double)rows * drawerRowH() + (double)(rows - 1) * 12.0 + (drawerRecentPad() ? RECENT_PAD_PX : 0.0);
 }
 
 double COverview::drawerMaxScroll() const {
     return std::max(0.0, drawerContentH() - drawerClipH());
+}
+
+// Padded gap after the recent row: only with an empty query, a shown
+// recent row, and more rows below it.
+bool COverview::drawerRecentPad() const {
+    if (!drawer.query.empty() || drawer.recentShown <= 0 || drawer.order.empty())
+        return false;
+    const size_t rows = (drawer.order.size() + (size_t)drawerCols() - 1) / (size_t)drawerCols();
+    return rows > 1;
 }
 
 int COverview::drawerAppAt(const Vector2D& local) const {
@@ -172,29 +202,52 @@ int COverview::drawerAppAt(const Vector2D& local) const {
     const double ly = local.y - (drawerTop() - drawer.scroll);
     if (ly < 0 || ly >= drawerClipH())
         return -1;
-    const int row = (int)(ly / (rh + 12.0));
-    if (ly - row * (rh + 12.0) > rh)
+    // Row 0 is exactly the recent row; the padded gap after it is dead.
+    int    row;
+    double within;
+    if (drawerRecentPad() && ly >= rh) {
+        const double afterFirst = ly - (rh + 12.0 + RECENT_PAD_PX);
+        if (afterFirst < 0)
+            return -1;
+        row    = 1 + (int)(afterFirst / (rh + 12.0));
+        within = afterFirst - (double)(row - 1) * (rh + 12.0);
+    } else {
+        row    = (int)(ly / (rh + 12.0));
+        within = ly - (double)row * (rh + 12.0);
+    }
+    if (within < 0 || within > rh)
         return -1;
     const size_t idx = (size_t)row * (size_t)drawerCols() + (size_t)col;
-    return idx < drawer.order.size() ? (int)idx : -1;
+    if (idx >= drawer.order.size() || drawer.order[idx] == Hyprexpo::Drawer::EMPTY_SLOT)
+        return -1;
+    return (int)idx;
 }
 
 CBox COverview::drawerTileBox(int orderIdx) const {
+    if (orderIdx < 0 || orderIdx >= (int)drawer.order.size() || drawer.order[orderIdx] == Hyprexpo::Drawer::EMPTY_SLOT)
+        return CBox{{0, 0}, {0, 0}};
     const double tw = drawerTileW();
     const double rh = drawerRowH();
     const int    row = orderIdx / drawerCols();
     const int    col = orderIdx % drawerCols();
-    return CBox{{48.0 + col * (tw + 16.0), drawerTop() + row * (rh + 12.0) - drawer.scroll}, {tw, rh}};
+    double       y   = drawerTop() + (double)row * (rh + 12.0) - drawer.scroll;
+    if (drawerRecentPad() && row >= 1)
+        y += RECENT_PAD_PX;
+    return CBox{{48.0 + col * (tw + 16.0), y}, {tw, rh}};
 }
 
 // --- model glue ---
 
 void COverview::drawerRescan() {
     drawer.apps  = Hyprexpo::Drawer::scanApps();
-    drawer.pins  = Hyprexpo::Drawer::loadPins();
+    drawer.recent = Hyprexpo::Drawer::loadRecent();
     drawer.query.clear();
     drawer.scroll        = 0;
-    drawer.pull          = 0;
+    drawer.lastPullS     = 0;
+    drawer.pullVisual    = 0;
+    drawer.pulling       = false;
+    drawer.pullEngaged   = false;
+    drawer.recentShown   = 0;
     drawer.hoverApp      = -1;
     drawer.searchFocused = false;
     drawer.queryDirty    = true;
@@ -203,7 +256,7 @@ void COverview::drawerRescan() {
 }
 
 void COverview::drawerRefilter() {
-    drawer.order = Hyprexpo::Drawer::filterApps(drawer.apps, drawer.pins, drawer.query);
+    drawer.order = Hyprexpo::Drawer::filterApps(drawer.apps, drawer.query, drawer.recent, drawerCols(), drawer.recentShown);
     drawer.scroll = std::clamp(drawer.scroll, 0.0, drawerMaxScroll());
     if (drawer.hoverApp >= (int)drawer.order.size())
         drawer.hoverApp = -1;
@@ -222,45 +275,162 @@ void COverview::drawerSetFitted(bool fitted) {
         return;
     drawer.fitted = fitted;
     drawer.scroll = 0;
-    drawer.pull   = 0;
+    drawer.lastPullS   = 0;
+    drawer.pullVisual  = 0;
+    drawer.pulling     = false;
+    drawer.pullEngaged = false;
     if (!fitted)
         drawer.searchFocused = false;
     damage();
 }
 
-// fingerDy: screen-space finger displacement, down positive.
-void COverview::drawerScrollBy(double fingerDy) {
-    const double threshold = (double)drawerCfgExpandPx();
-    if (!drawer.fitted) {
-        if (fingerDy < 0) {
-            drawer.pull += -fingerDy;
-            if (drawer.pull >= threshold) {
-                drawer.pull = 0;
-                drawerSetFitted(true);
-            }
-        } else {
-            drawer.pull = 0;
-        }
-        return;
-    }
-    if (drawer.scroll <= 0 && fingerDy > 0) {
-        drawer.pull += fingerDy;
-        if (drawer.pull >= threshold) {
-            drawer.pull = 0;
-            drawerSetFitted(false);
-        }
-        return;
-    }
-    drawer.pull = 0;
-    const double next = std::clamp(drawer.scroll - fingerDy, 0.0, drawerMaxScroll());
-    if (next != drawer.scroll) {
-        drawer.scroll = next;
-        damage();
-    }
+double COverview::drawerPullStamp() {
+    const double now = std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
+    drawer.lastPullS = now;
+    return now;
 }
 
-void COverview::drawerTap(const Vector2D& local, bool rightClick) {
-    if (regionAtPoint(local) == ERegion::Search && !rightClick) {
+// Scrolls the app list by a downward-positive displacement. Returns the
+// overshoot pushed past the top of the list (down positive, else 0): the
+// caller turns overshoot into sheet pull or rubber-band resistance.
+double COverview::drawerListScroll(double fingerDy) {
+    const double before = drawer.scroll;
+    drawer.scroll       = std::clamp(before - fingerDy, 0.0, drawerMaxScroll());
+    return fingerDy > 0.0 ? std::max(0.0, fingerDy - before) : 0.0;
+}
+
+// fingerDy: wheel/touchpad displacement, down positive, already scaled
+// for the source (see the axis hook). Wheels have no release event, so
+// they ride the same visual pull as fingers, plus a detent: a push must
+// travel past the threshold AND keep pushing against the wall to commit.
+// Anything shorter visibly springs back once the burst goes idle.
+void COverview::drawerScrollBy(double fingerDy) {
+    if (closing)
+        return;
+    drawerPullStamp();
+    const double threshold = drawerPullThreshold();
+    const double span      = drawerPullSpan();
+    if (span <= 0.0)
+        return;
+    if (!drawer.fitted) {
+        if (fingerDy >= 0.0) {
+            drawer.pullVisual = 0.0;
+            return;
+        }
+        if (drawer.pullVisual <= -(threshold + COMMIT_OVERSHOOT_PX))
+            commitDrawerPull(true, span);
+        else
+            drawer.pullVisual = std::clamp(drawer.pullVisual + fingerDy, -(threshold + COMMIT_OVERSHOOT_PX), 0.0);
+        damage();
+        return;
+    }
+    const double before = drawer.scroll;
+    const double over   = drawerListScroll(fingerDy);
+    // Engagement is scroll position, never screen position: only a push
+    // that starts within the top row may close. Deeper pushes just scroll.
+    if (fingerDy > 0.0 && over > 0.0 && before <= drawerRowH()) {
+        if (drawer.pullVisual >= threshold + COMMIT_OVERSHOOT_PX)
+            commitDrawerPull(false, span);
+        else
+            drawer.pullVisual = std::clamp(drawer.pullVisual + over, 0.0, threshold + COMMIT_OVERSHOOT_PX);
+    } else {
+        drawer.pullVisual = 0.0;
+    }
+    damage();
+}
+
+// Grid press: latch whether THIS drag may commit open/close. The latch is
+// the drawer's scroll position, not the touch point: a drag that starts
+// with the first row visible ("at the top") may close; one started
+// scrolled deeper can only scroll or resist, never close by mistake.
+// Never clears pullVisual: a second finger (or driver re-press) joining a
+// live pull continues it instead of snapping the sheet out from under the
+// first finger.
+void COverview::drawerPullBegin() {
+    if (closing)
+        return;
+    drawer.pulling     = false;
+    drawer.pullEngaged = !drawer.fitted || drawer.scroll <= drawerRowH();
+    drawerPullStamp();
+}
+
+// Commit an open/close pull, seeding the snap animation from the live
+// sheet position so there is no jump.
+void COverview::commitDrawerPull(bool open, double span) {
+    if (span <= 0.0)
+        return;
+    if (open)
+        drawer.anim = std::clamp((float)(-drawer.pullVisual / span), 0.0F, 1.0F);
+    else
+        drawer.anim = 1.0F - std::clamp((float)(drawer.pullVisual / span), 0.0F, 1.0F);
+    drawer.pullVisual = 0;
+    drawerSetFitted(open);
+}
+
+// Pull path (mouse/touch drags): the sheet follows the finger via
+// pullVisual; the open/close decision happens on release (drawerDragEnd).
+void COverview::drawerPullBy(double fingerDy) {
+    if (closing)
+        return;
+    drawerPullStamp();
+    const double span = drawerPullSpan();
+    if (span <= 0.0)
+        return;
+    if (!drawer.fitted) {
+        // Docked: any Grid press may pull the sheet up to open.
+        drawer.pulling     = true;
+        drawer.pullEngaged = true;
+        drawer.pullVisual  = std::clamp(drawer.pullVisual + fingerDy, -span, 0.0);
+        damage();
+        return;
+    }
+    drawer.pulling = true;
+    if (drawer.pullEngaged) {
+        // Drag started at the top: the list absorbs what it can, the
+        // overshoot pulls the sheet toward close.
+        const double over = drawerListScroll(fingerDy);
+        if (over > 0.0)
+            drawer.pullVisual = std::clamp(drawer.pullVisual + over, 0.0, span);
+        else
+            drawer.pullVisual = 0.0;
+        damage();
+        return;
+    }
+    // Drag started scrolled down: plain list scroll, plus rubber-band
+    // resistance when pushing past the top. Never accumulates a close.
+    const double over = drawerListScroll(fingerDy);
+    if (over > 0.0)
+        drawer.pullVisual = std::clamp(drawer.pullVisual + over * (double)drawerCfgResist(), 0.0, RESIST_CAP_PX);
+    else
+        drawer.pullVisual = 0.0;
+    damage();
+}
+
+// Release: pulled far enough -> animate to the new state; otherwise the
+// sheet springs back (drawerStepAnim decays pullVisual to zero).
+void COverview::drawerDragEnd(bool commit) {
+    if (!drawer.pulling)
+        return;
+    drawer.pulling = false;
+    const double threshold = drawerPullThreshold();
+    const double span      = drawerPullSpan();
+    if (commit && drawer.pullEngaged && span > 0.0) {
+        if (!drawer.fitted && -drawer.pullVisual >= threshold) {
+            commitDrawerPull(true, span);
+            return;
+        }
+        if (drawer.fitted && drawer.pullVisual >= threshold) {
+            commitDrawerPull(false, span);
+            return;
+        }
+    }
+    drawer.pullEngaged = false;
+    drawer.lastPullS   = 0; // snap back immediately, don't wait out the idle window
+    damage();
+}
+
+void COverview::drawerTap(const Vector2D& local) {
+    if (regionAtPoint(local) == ERegion::Search) {
         drawer.searchFocused = true;
         damage();
         return;
@@ -271,32 +441,15 @@ void COverview::drawerTap(const Vector2D& local, bool rightClick) {
         damage();
         return;
     }
-    if (rightClick) {
-        drawerTogglePin((size_t)idx);
-        return;
-    }
     drawerLaunch((size_t)idx);
 }
 
-void COverview::drawerTogglePin(size_t orderIdx) {
-    if (orderIdx >= drawer.order.size())
-        return;
-    const std::string id = drawer.apps[drawer.order[orderIdx]].id;
-    auto pins = Hyprexpo::Drawer::loadPins();
-    auto it   = std::find(pins.begin(), pins.end(), id);
-    if (it != pins.end())
-        pins.erase(it);
-    else
-        pins.push_back(id);
-    Hyprexpo::Drawer::savePins(pins);
-    drawer.pins = std::move(pins);
-    drawerRefilter();
-}
-
 void COverview::drawerLaunch(size_t orderIdx) {
-    if (orderIdx >= drawer.order.size())
+    if (orderIdx >= drawer.order.size() || drawer.order[orderIdx] == Hyprexpo::Drawer::EMPTY_SLOT)
         return;
-    // Launch first (detached): close() below destroys this session.
+    // Record first: this launch tops the recent row next open. Launch
+    // itself is detached; close() below destroys this session.
+    Hyprexpo::Drawer::recordRecent(drawer.apps[drawer.order[orderIdx]].id);
     Hyprexpo::Drawer::launchApp(drawer.apps[drawer.order[orderIdx]]);
     drawer.searchFocused = false;
     close(false);
@@ -375,10 +528,24 @@ SP<Render::ITexture> COverview::drawerIconTexture(const Hyprexpo::Drawer::SApp& 
         }
     }
     if (!tex) {
-        // glyph fallback: first letter on a tinted tile
-        std::string letter = app.name.empty() ? "?" : app.name.substr(0, 1);
-        for (auto& c : letter)
-            c = toupper(c);
+        // glyph fallback: first character on a tinted tile (UTF-8 aware:
+        // never split a multibyte codepoint, only ASCII gets uppercased)
+        std::string letter = "?";
+        if (!app.name.empty()) {
+            const unsigned char lead = (unsigned char)app.name[0];
+            size_t len = 1;
+            if ((lead & 0x80) == 0)
+                len = 1;
+            else if ((lead & 0xE0) == 0xC0)
+                len = 2;
+            else if ((lead & 0xF0) == 0xE0)
+                len = 3;
+            else if ((lead & 0xF8) == 0xF0)
+                len = 4;
+            letter = app.name.substr(0, std::min(len, app.name.size()));
+            if (letter.size() == 1)
+                letter[0] = (char)toupper((unsigned char)letter[0]);
+        }
         const int s = std::max(16, (int)(px * scale));
         tex = renderNumberTexture(letter, CHyprColor{0xffa9b1d6}, Vector2D{(double)s, (double)s}, 1.0, (int)(s * 0.45));
     }
@@ -401,13 +568,25 @@ void COverview::drawerStepAnim() {
     const double now = std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
     const double dt = drawer.lastStepS <= 0.0 ? 0.016 : std::min(0.1, now - drawer.lastStepS);
     drawer.lastStepS = now;
-    if (std::abs(drawer.anim - target) < 0.002f) {
-        drawer.anim = target;
-        return;
+    // Released short of the threshold (or a quiet wheel burst), the
+    // sheet springs back to rest once input goes idle — but never while a
+    // press is physically down. A resting finger sends no motion events,
+    // so without the activity gate the sheet would snap back underneath
+    // a held finger.
+    if (!drawer.pulling && drawer.pullVisual != 0.0 && !touchPress.active && !drawer.mouseArmed && now - drawer.lastPullS > 0.15) {
+        drawer.pullVisual += (0.0 - drawer.pullVisual) * std::min(1.0, dt * 12.0);
+        if (std::abs(drawer.pullVisual) < 0.5)
+            drawer.pullVisual = 0.0;
     }
-    drawer.anim += (target - drawer.anim) * (float)std::min(1.0, dt * 7.0);
     if (std::abs(drawer.anim - target) < 0.002f)
         drawer.anim = target;
+    else {
+        drawer.anim += (target - drawer.anim) * (float)std::min(1.0, dt * 7.0);
+        if (std::abs(drawer.anim - target) < 0.002f)
+            drawer.anim = target;
+    }
+    if (drawer.anim == target && drawer.pullVisual == 0.0)
+        return;
     damage();
 }
 
@@ -454,8 +633,14 @@ void COverview::renderDrawerPass() {
     const double rh = drawerRowH();
     const int iconPx = drawerCfgIconPx();
     for (size_t oi = 0; oi < drawer.order.size(); ++oi) {
+        if (drawer.order[oi] == Hyprexpo::Drawer::EMPTY_SLOT)
+            continue; // recent-row padding hole: no tile, no hit test
         CBox tile = drawerTileBox((int)oi);
         if (tile.y + tile.h < drawerTop() || tile.y > drawerTop() + drawerClipH())
+            continue;
+        // Apps disappear underneath the search bar instead of rendering
+        // on top of it: anything reaching into the strip is culled whole.
+        if (tile.y < sTop + sH)
             continue;
         const auto& app = drawer.apps[drawer.order[oi]];
         if ((int)oi == drawer.hoverApp) {

@@ -3,6 +3,7 @@
 #include <map>
 #include "HyprlandConfigCompat.hpp"
 #include "HyprexpoConfig.hpp"
+#include "ConfigValues.hpp"
 #include "OverviewInternal.hpp"
 #include "OverviewCapture.hpp"
 #include "HyprexpoLogic.hpp"
@@ -1034,62 +1035,154 @@ Hyprexpo::STileLayout COverview::tileLayoutForIndex(int id, const Vector2D& tota
 }
 
 namespace {
-// Ribbon band: workspace tiles live in the top slice only; the search
-// strip and app drawer own everything below it. Tiles are deterministic
-// 16:10 slots (never stretched): width from column count, height derived,
-// row centered. Slots beyond `cols` do not exist (empty box, unhittable).
-double ribbonTileW(double W, int cols, double gap, double outer) {
+// Ribbon: workspace tiles live in the top slice only; the search strip
+// and app drawer own everything below it. Tiles are deterministic 16:10
+// slots (never stretched), scaled up for touch, vertically centered in the
+// space above the docked search strip. Slots beyond `cols` do not exist
+// (empty box, unhittable). Gaps are doubled vs the grid default: finger
+// sized padding between tiles.
+double ribbonGap(double gap) {
+    return gap * 2.0;
+}
+float ribbonScale() {
+    const float scale = Hyprexpo::ConfigValues::getFloat("plugin:hyprexpo:ribbon_scale", HyprexpoConfig::RIBBON_SCALE_DEFAULT);
+    return scale > 0.0F ? scale : HyprexpoConfig::RIBBON_SCALE_DEFAULT;
+}
+// Shared slot layout: tile size from `cols` (config columns, never
+// stretched), row width from `count` (pannable slots). scrollX pans the
+// strip when the scaled row overflows the output; otherwise the row stays
+// centered and scrollX is ignored.
+void ribbonTileSize(const Vector2D& total, int cols, double gap, double outer, double& tileW, double& tileH) {
     if (cols < 1)
         cols = 1;
-    return std::max(1.0, (W - 2.0 * outer - (double)(cols - 1) * gap) / (double)cols);
+    const double rgap = ribbonGap(gap);
+    tileW             = std::max(1.0, (total.x - 2.0 * outer - (double)(cols - 1) * rgap) / (double)cols) * ribbonScale();
+    tileH             = tileW * 10.0 / 16.0;
 }
-double ribbonTileH(double tileW) {
-    return tileW * 10.0 / 16.0;
+double ribbonRowWidthForCount(double tileW, double rgap, int count) {
+    if (count < 1)
+        count = 1;
+    return (double)count * tileW + (double)(count - 1) * rgap;
 }
-double ribbonBandH(double W, double H, int cols, double gap, double outer) {
-    (void)H;
-    return ribbonTileH(ribbonTileW(W, cols, gap, outer)) + 2.0 * outer;
+double ribbonMaxScrollFor(const Vector2D& total, int cols, int count, double gap, double outer) {
+    double tileW, tileH;
+    ribbonTileSize(total, cols, gap, outer, tileW, tileH);
+    const double rowW = ribbonRowWidthForCount(tileW, ribbonGap(gap), count);
+    if (rowW <= total.x)
+        return 0.0;
+    return rowW - (total.x - 2.0 * outer);
+}
+void ribbonLayout(const Vector2D& total, int cols, int count, double gap, double outer, double searchH, double rowH, double scrollX, double& x0,
+                  double& y0, double& tileW, double& tileH) {
+    const double rgap = ribbonGap(gap);
+    ribbonTileSize(total, cols, gap, outer, tileW, tileH);
+    const double rowW      = ribbonRowWidthForCount(tileW, rgap, count);
+    const double maxScroll = rowW <= total.x ? 0.0 : rowW - (total.x - 2.0 * outer);
+    if (maxScroll <= 0.0)
+        x0 = (total.x - rowW) / 2.0;
+    else
+        x0 = outer - std::clamp(scrollX, 0.0, maxScroll);
+    const double availH = total.y - 16.0 - rowH - 12.0 - searchH; // above docked search
+    y0                  = std::max(outer, (availH - tileH) / 2.0);
 }
 } // namespace
+
+// Trailing-trimmed valid tiles: provisioning lays out a leading-contiguous
+// range (center/backtrack + forward scan, or the dynamic set) and leaves
+// the rest WORKSPACE_INVALID. The ribbon shows the whole range.
+int COverview::ribbonCount() const {
+    int count = 0;
+    for (size_t i = 0; i < images.size(); ++i) {
+        if (images[i].workspaceID != WORKSPACE_INVALID)
+            count = (int)i + 1;
+    }
+    return count;
+}
+
+double COverview::ribbonMaxScroll() const {
+    const auto MON = pMonitor.lock();
+    if (!MON)
+        return 0.0;
+    return ribbonMaxScrollFor(MON->m_size, std::max(1, currentGridShape().cols), ribbonCount(), (double)GAP_WIDTH, currentOuterInset());
+}
+
+void COverview::ribbonScrollBy(double deltaPx) {
+    if (closing)
+        return;
+    const double max  = ribbonMaxScroll();
+    const double next = max <= 0.0 ? 0.0 : std::clamp(ribbonScrollX + deltaPx, 0.0, max);
+    if (next != ribbonScrollX) {
+        ribbonScrollX = next;
+        damage();
+    }
+}
+
+void COverview::ribbonPanBy(double fingerDx) {
+    // Touch: content follows the finger (drag right -> strip moves right).
+    ribbonScrollBy(-fingerDx);
+}
+
+// Open-time: center the active workspace's tile in the strip. Runs in the
+// ctor with final geometry (outer read straight from config: the size
+// animation does not exist yet, so currentOuterInset() is unsafe here).
+void COverview::ribbonScrollToWorkspace(int wsid) {
+    const auto MON = pMonitor.lock();
+    if (!MON)
+        return;
+    const int id = tileForWorkspaceID(wsid);
+    if (id < 0)
+        return;
+    const double outer = (double)std::max(0, Hyprexpo::ConfigValues::getInt("plugin:hyprexpo:gaps_out", HyprexpoConfig::GAPS_OUT_DEFAULT));
+    const int    cols          = std::max(1, currentGridShape().cols);
+    const int    count         = ribbonCount();
+    if (count <= 0)
+        return;
+    double x0, y0, tileW, tileH;
+    ribbonLayout(MON->m_size, cols, count, (double)GAP_WIDTH, outer, searchH(), drawerRowH(), 0.0, x0, y0, tileW, tileH);
+    const double rgap   = ribbonGap((double)GAP_WIDTH);
+    const double center = x0 + (double)id * (tileW + rgap) + tileW / 2.0;
+    const double max    = ribbonMaxScrollFor(MON->m_size, cols, count, (double)GAP_WIDTH, outer);
+    ribbonScrollX       = max <= 0.0 ? 0.0 : std::clamp(center - MON->m_size.x / 2.0, 0.0, max);
+}
 
 double COverview::ribbonH() const {
     const auto MON = pMonitor.lock();
     if (!MON)
         return 0.0;
     const int cols = std::max(1, currentGridShape().cols);
-    return ribbonBandH(MON->m_size.x, MON->m_size.y, cols, (double)GAP_WIDTH, currentOuterInset());
+    double x0, y0, tileW, tileH;
+    ribbonLayout(MON->m_size, cols, ribbonCount(), (double)GAP_WIDTH, currentOuterInset(), searchH(), drawerRowH(), ribbonScrollX, x0, y0, tileW,
+                 tileH);
+    return y0 + tileH;
 }
 
 CBox COverview::tileBoxForIndex(int id, const Vector2D& totalSize, double gap, double outerInset, bool centerPartialRows) const {
-    // Ribbon: deterministic slots (see above). Every tile consumer — render,
-    // hover, drag, labels, damage — flows through here and follows.
+    // Ribbon slots (see above). Every tile consumer — render, hover, drag,
+    // labels, damage — flows through here and follows.
     (void)centerPartialRows;
     const int cols = std::max(1, currentGridShape().cols);
-    if (id < 0 || id >= cols)
+    if (id < 0 || id >= ribbonCount())
         return CBox{{0, 0}, {0, 0}};
-    const double tileW = ribbonTileW(totalSize.x, cols, gap, outerInset);
-    const double tileH = ribbonTileH(tileW);
-    const double rowW  = cols * tileW + (cols - 1) * gap;
-    const double x0    = (totalSize.x - rowW) / 2.0;
-    return CBox{{x0 + id * (tileW + gap), outerInset}, {tileW, tileH}};
+    double x0, y0, tileW, tileH;
+    ribbonLayout(totalSize, cols, ribbonCount(), gap, outerInset, searchH(), drawerRowH(), ribbonScrollX, x0, y0, tileW, tileH);
+    const double rgap = ribbonGap(gap);
+    return CBox{{x0 + id * (tileW + rgap), y0}, {tileW, tileH}};
 }
 
 int COverview::tileIndexAtPoint(const Vector2D& point, const Vector2D& totalSize, double gap, double outerInset, bool centerPartialRows) const {
     (void)centerPartialRows;
     const int cols = std::max(1, currentGridShape().cols);
-    const double tileW = ribbonTileW(totalSize.x, cols, gap, outerInset);
-    const double tileH = ribbonTileH(tileW);
-    const double rowW  = cols * tileW + (cols - 1) * gap;
-    const double x0    = (totalSize.x - rowW) / 2.0;
-    const double y0    = outerInset;
-    const double lx    = point.x - x0;
-    const double ly    = point.y - y0;
+    double x0, y0, tileW, tileH;
+    ribbonLayout(totalSize, cols, ribbonCount(), gap, outerInset, searchH(), drawerRowH(), ribbonScrollX, x0, y0, tileW, tileH);
+    const double rgap = ribbonGap(gap);
+    const double lx   = point.x - x0;
+    const double ly   = point.y - y0;
     if (lx < 0 || ly < 0 || ly >= tileH)
         return -1;
-    const int slot = (int)(lx / (tileW + gap));
-    if (slot < 0 || slot >= cols)
+    const int slot = (int)(lx / (tileW + rgap));
+    if (slot < 0 || slot >= ribbonCount())
         return -1;
-    if (lx - slot * (tileW + gap) > tileW)
+    if (lx - slot * (tileW + rgap) > tileW)
         return -1;
     if (slot >= (int)images.size())
         return -1;
@@ -1101,13 +1194,34 @@ Vector2D COverview::tilePosForID(int id, const Vector2D& totalSize, double gap, 
     return {box.x, box.y};
 }
 
+// Ribbon-aware zoom canvas: a virtual size at which the tiles keep their
+// exact ribbon geometry while one tile covers the screen. The old grid
+// math sized tiles to the screen aspect, but ribbon tiles are fixed
+// 16:10 * ribbon_scale, so it framed them 1.5x too large (over-zoom)
+// and the end of the animation snapped back to the real layout.
 Vector2D COverview::zoomSizeForCurrentGrid(const Vector2D& monitorSize) const {
-    const auto shape = currentGridShape();
-    const auto tileSize = Hyprexpo::aspectCorrectTileSize(monitorSize.x, monitorSize.y, shape.cols, shape.rows, 0.0);
-    if (tileSize.w <= 0.0 || tileSize.h <= 0.0)
+    if (monitorSize.x <= 0.0 || monitorSize.y <= 0.0)
         return monitorSize;
+    const int    cols   = std::max(1, currentGridShape().cols);
+    const double coverW = std::max(monitorSize.x, monitorSize.y * 16.0 / 10.0);
+    const double scale  = std::max(0.01F, ribbonScale());
+    return {cols * coverW / (double)scale, monitorSize.y};
+}
 
-    return {monitorSize.x * monitorSize.x / tileSize.w, monitorSize.y * monitorSize.y / tileSize.h};
+// Physical-px offset that centers tile `id` (laid out on `canvasSize`)
+// on the screen. Start frame of the open animation / end frame of close.
+Vector2D COverview::zoomPosForTile(int id, const Vector2D& canvasSize) const {
+    const auto MON = pMonitor.lock();
+    if (!MON)
+        return {0, 0};
+    const int cols  = std::max(1, currentGridShape().cols);
+    const int count = std::max(1, ribbonCount());
+    id              = std::clamp(id, 0, count - 1);
+    double x0, y0, tileW, tileH;
+    ribbonLayout(canvasSize, cols, count, 0.0, 0.0, searchH(), drawerRowH(), ribbonScrollX, x0, y0, tileW, tileH);
+    const double cx = x0 + (double)id * tileW + tileW / 2.0; // gap is 0 at zoom framing
+    const double cy = y0 + tileH / 2.0;
+    return {(MON->m_size.x / 2.0 - cx) * MON->m_scale, (MON->m_size.y / 2.0 - cy) * MON->m_scale};
 }
 
 COverview::~COverview() {
@@ -1195,15 +1309,19 @@ COverview::COverview(PHLWORKSPACE startedOn_, PHLMONITOR monitor_, bool swipe_, 
 
         std::optional<int64_t> lowestExistingID;
         std::optional<int64_t> highestExistingID;
+        // Centering bounds come from the workspaces that actually exist on
+        // this monitor. This must run for skip_empty too: without bounds the
+        // backtrack target collapses and the strip starts at the active
+        // workspace with no way to reach previous ones.
+        for (const auto& workspace : State::workspaceState()->workspacesCopy()) {
+            if (!workspace || workspace->m_isSpecialWorkspace || workspace->m_monitor != PMONITOR)
+                continue;
+
+            lowestExistingID  = lowestExistingID ? std::min(*lowestExistingID, workspace->m_id) : workspace->m_id;
+            highestExistingID = highestExistingID ? std::max(*highestExistingID, workspace->m_id) : workspace->m_id;
+        }
+
         if (!skipEmpty) {
-            for (const auto& workspace : State::workspaceState()->workspacesCopy()) {
-                if (!workspace || workspace->m_isSpecialWorkspace || workspace->m_monitor != PMONITOR)
-                    continue;
-
-                lowestExistingID  = lowestExistingID ? std::min(*lowestExistingID, workspace->m_id) : workspace->m_id;
-                highestExistingID = highestExistingID ? std::max(*highestExistingID, workspace->m_id) : workspace->m_id;
-            }
-
             // Workspace rules reserve IDs for this monitor even while those workspaces are empty
             // and therefore do not exist, so a range such as 11-20 keeps its real floor (#133).
             for (const auto& rule : Config::workspaceRuleMgr()->getAllWorkspaceRules()) {
@@ -1323,6 +1441,11 @@ COverview::COverview(PHLWORKSPACE startedOn_, PHLMONITOR monitor_, bool swipe_, 
             images[i].workspaceID = visibleWorkspaceIDs[i];
     }
 
+    // Ribbon opens scrolled to the active workspace; the rest of the
+    // provisioned range pans in from either side.
+    if (startedOn)
+        ribbonScrollToWorkspace((int)startedOn->m_id);
+
     Render::GL::g_pHyprOpenGL->makeEGLCurrent();
 
     const auto tileSize = Hyprexpo::aspectCorrectTileSize(pMonitor->m_size.x, pMonitor->m_size.y, gridShape.cols, gridShape.rows, 0.0);
@@ -1369,7 +1492,7 @@ COverview::COverview(PHLWORKSPACE startedOn_, PHLMONITOR monitor_, bool swipe_, 
 
     const auto initSize = zoomSizeForCurrentGrid(pMonitor->m_size);
     Animation::mgr()->createAnimation(initSize, size, Config::animationTree()->getAnimationPropertyConfig("windowsMove"), AVARDAMAGE_NONE);
-    Animation::mgr()->createAnimation(-(tilePosForID(currentid, initSize, 0.0) * pMonitor->m_scale), pos, Config::animationTree()->getAnimationPropertyConfig("windowsMove"), AVARDAMAGE_NONE);
+    Animation::mgr()->createAnimation(zoomPosForTile(currentid, initSize), pos, Config::animationTree()->getAnimationPropertyConfig("windowsMove"), AVARDAMAGE_NONE);
 
     size->setUpdateCallback(damageMonitor);
     pos->setUpdateCallback(damageMonitor);
@@ -1409,7 +1532,7 @@ COverview::COverview(PHLWORKSPACE startedOn_, PHLMONITOR monitor_, bool swipe_, 
                 if (std::hypot(dd.x, dd.y) >= 12.0)
                     OV->drawer.mouseMoved = true;
                 if (OV->drawer.mouseMoved)
-                    OV->drawerScrollBy(dd.y);
+                    OV->drawerPullBy(dd.y);
             }
             OV->lastMousePosLocal = newLocal;
             OV->updateHoveredFromMouse();
@@ -1460,18 +1583,20 @@ COverview::COverview(PHLWORKSPACE startedOn_, PHLMONITOR monitor_, bool swipe_, 
                 }
                 if (region == COverview::ERegion::Grid) {
                     if (event.state == WL_POINTER_BUTTON_STATE_PRESSED) {
-                        if (event.button == 0x111) { // right button: pin/unpin
-                            TARGET->drawerTap(local, true);
+                        if (event.button == 0x111) {
+                            return; // right button: intentionally nothing (no pin system)
                         } else {
                             TARGET->drawer.mouseArmed = true;
                             TARGET->drawer.mouseApp = TARGET->drawerAppAt(local);
                             TARGET->drawer.mouseDown = local;
                             TARGET->drawer.mouseMoved = false;
+                            TARGET->drawerPullBegin();
                         }
                     } else if (TARGET->drawer.mouseArmed) {
                         TARGET->drawer.mouseArmed = false;
+                        TARGET->drawerDragEnd();
                         if (!TARGET->drawer.mouseMoved)
-                            TARGET->drawerTap(local, false);
+                            TARGET->drawerTap(local);
                     }
                     return;
                 }
@@ -1541,8 +1666,10 @@ COverview::COverview(PHLWORKSPACE startedOn_, PHLMONITOR monitor_, bool swipe_, 
         }
     });
     mouseAxisHook = Event::bus()->m_events.input.mouse.axis.listen([](const IPointer::SAxisEvent& event, Event::SCallbackInfo& info) {
-        // Wheel / touchpad scroll over the drawer scrolls it (or snaps it
-        // docked<->fitted). Everywhere else the event falls through untouched.
+        // Wheel / touchpad scroll: vertical over the drawer scrolls it (or
+        // snaps it docked<->fitted); horizontal over the ribbon pans the
+        // workspace strip. Vertical over the ribbon intentionally does
+        // nothing. Everywhere else the event falls through untouched.
         const Vector2D GLOBAL = g_pInputManager->getMouseCoordsInternal();
         for (const auto& session : g_overviews) {
             auto* const OV = dynamic_cast<COverview*>(session.get());
@@ -1551,9 +1678,39 @@ COverview::COverview(PHLWORKSPACE startedOn_, PHLMONITOR monitor_, bool swipe_, 
             const auto MON = OV->monitor();
             if (!MON)
                 continue;
-            if (OV->regionAtPoint(GLOBAL - MON->m_position) != COverview::ERegion::Grid)
+            const auto region = OV->regionAtPoint(GLOBAL - MON->m_position);
+            // Mouse wheels tick in coarse steps (amplify); touchpads stream
+            // pixel-true deltas (use as-is) so a short swipe can't blow past
+            // the pull threshold and toggle the drawer by mistake.
+            const bool   discrete = event.source == WL_POINTER_AXIS_SOURCE_WHEEL || event.deltaDiscrete != 0;
+            const double steps    = event.delta * (discrete ? 4.0 : 1.0);
+            if (region == COverview::ERegion::Ribbon) {
+                // Horizontal (touchpad two-finger / tilt wheel) pans the
+                // workspace strip; vertical falls through untouched.
+                if (event.axis != WL_POINTER_AXIS_HORIZONTAL_SCROLL)
+                    continue;
+                OV->ribbonScrollBy(steps);
+                info.cancelled = true;
+                return;
+            }
+            if (region != COverview::ERegion::Grid)
                 continue;
-            OV->drawerScrollBy(event.delta * 4.0);
+            if (event.axis == WL_POINTER_AXIS_HORIZONTAL_SCROLL)
+                continue;
+            // wheel has no press point: engagement is scroll position only
+            // (top of the list may close, deeper never does).
+            OV->drawerScrollBy(steps);
+            // The pointer didn't move, so the highlight would sit on the
+            // wrong app after the content shifted: refresh it from the
+            // cursor like a mouse move would.
+            {
+                const Vector2D local = GLOBAL - MON->m_position;
+                const int      idx   = OV->drawerAppAt(local);
+                if (idx != OV->drawer.hoverApp) {
+                    OV->drawer.hoverApp = idx;
+                    OV->damage();
+                }
+            }
             info.cancelled = true;
             return;
         }

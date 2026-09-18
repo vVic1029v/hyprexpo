@@ -26,7 +26,7 @@ inline constexpr int         COLUMNS_MIN                     = 1;
 inline constexpr int         COLUMNS_MAX                     = 7;
 inline constexpr int         GAPS_IN_DEFAULT                 = 5;
 inline constexpr int         GAPS_OUT_DEFAULT                = 0;
-inline constexpr unsigned    BG_COL_DEFAULT                  = 0xFF111111;
+inline constexpr unsigned    BG_COL_DEFAULT                  = 0x00111111;
 inline constexpr const char* WORKSPACE_METHOD_DEFAULT        = "center current";
 inline constexpr const char* OVERVIEW_MODE_DEFAULT           = "auto";
 inline constexpr int         SKIP_EMPTY_DEFAULT              = 0;
@@ -109,4 +109,6 @@ inline constexpr int         DRAWER_COLUMNS_DEFAULT          = 5;
 inline constexpr int         DRAWER_SEARCH_H_DEFAULT         = 64;
 inline constexpr int         DRAWER_EXPAND_PX_DEFAULT        = 60;
 inline constexpr int         DRAWER_ICON_PX_DEFAULT          = 72;
+inline constexpr float       RIBBON_SCALE_DEFAULT            = 1.5F;
+inline constexpr float       DRAWER_RESIST_DEFAULT           = 0.25F;
 }

@@ -106,6 +106,8 @@ void registerHyprexpoConfigValues() {
     // tile rounding (rounded corners for workspace previews)
     addConfigValue(makeShared<Config::Values::CIntValue>("plugin:hyprexpo:tile_rounding", "tile rounding", HyprexpoConfig::TILE_ROUNDING_DEFAULT));
     addConfigValue(makeShared<Config::Values::CFloatValue>("plugin:hyprexpo:tile_rounding_power", "tile rounding power", HyprexpoConfig::TILE_ROUNDING_POWER_DEFAULT));
+    addConfigValue(makeShared<Config::Values::CFloatValue>("plugin:hyprexpo:ribbon_scale", "workspace ribbon tile scale", HyprexpoConfig::RIBBON_SCALE_DEFAULT));
+    addConfigValue(makeShared<Config::Values::CFloatValue>("plugin:hyprexpo:drawer_resist", "rubber-band factor for deep drawer pulls (0-1)", HyprexpoConfig::DRAWER_RESIST_DEFAULT));
     addConfigValue(makeShared<Config::Values::CIntValue>("plugin:hyprexpo:tile_rounding_focus", "focus tile rounding", HyprexpoConfig::TILE_ROUNDING_FOCUS_DEFAULT));
     addConfigValue(makeShared<Config::Values::CIntValue>("plugin:hyprexpo:tile_rounding_current", "current tile rounding", HyprexpoConfig::TILE_ROUNDING_CURRENT_DEFAULT));
     addConfigValue(makeShared<Config::Values::CIntValue>("plugin:hyprexpo:tile_rounding_hover", "hover tile rounding", HyprexpoConfig::TILE_ROUNDING_HOVER_DEFAULT));
