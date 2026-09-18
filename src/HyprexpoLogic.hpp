@@ -227,4 +227,51 @@ int                      resolveLabelFontSize(int modernValue, bool modernSetByU
 SWorkspaceMethodSpec     parseWorkspaceMethodSpec(const std::string& method);
 SWorkspaceMethodSpec     resolveWorkspaceMethodForMonitor(const std::string& config, const std::string& monitorName);
 
+namespace Osk {
+// On-screen-keyboard layer matching. Pure: layer enumeration stays in the
+// compositor-facing helper; everything decidable lives here testable.
+struct SLayerCandidate {
+    std::string ns;
+    double      x = 0.0, y = 0.0, w = 0.0, h = 0.0;
+};
+struct SScanResult {
+    bool        hit = false;
+    std::string learnedNs; // newly adopted keyboard namespace, if any
+};
+
+// configured + already-learned namespaces hit-test both the global and the
+// monitor-local point (layer geometry space is not contracted anywhere
+// stable). The first unlisted but keyboard-shaped surface (wide, short) is
+// adopted on the spot so an unset config fills on first detect.
+SScanResult scanLayers(const std::vector<std::string>& configured, const std::vector<std::string>& learned,
+                       const std::vector<SLayerCandidate>& layers, double monW, double monH, double gx, double gy, double lx, double ly);
+
+} // namespace Osk
+
+namespace Ribbon {
+// Deterministic workspace-strip geometry. Pure: no compositor, no config,
+// plain doubles throughout so the logic suite covers it directly.
+inline constexpr double TILE_ASPECT_W = 16.0;
+inline constexpr double TILE_ASPECT_H = 10.0;
+inline constexpr double GAP_MULTIPLIER = 2.0; // finger-sized padding vs the grid default
+
+struct SStrip {
+    double x0 = 0.0;        // strip origin (scroll offset applied)
+    double y0 = 0.0;        // vertically centered above the search strip
+    double tileW = 1.0;
+    double tileH = 1.0;
+    double rowW = 1.0;      // full strip width
+    double maxScroll = 0.0; // pan range, 0 when the strip fits
+};
+
+// Tile size comes from `cols` (never stretched); the row spans `count`
+// pannable slots. scrollX is clamped to the pan range internally.
+SStrip layoutStrip(double totalW, double totalH, int cols, int count, double gap, double outer, double searchH, double rowH, double scrollX,
+                   double scale);
+// Slot index for strip-local coords, or -1 (gap/miss). Caller bounds the
+// result against its tile store.
+int slotIndexAtPoint(double lx, double ly, const SStrip& strip, double gap, int count);
+
+} // namespace Ribbon
+
 }

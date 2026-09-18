@@ -3,6 +3,7 @@
 #include "PluginConfig.hpp"
 
 #include "Dispatchers.hpp"
+#include "DrawerAddon.hpp"
 #include "globals.hpp"
 #include "HyprexpoConfig.hpp"
 #include <hyprland/src/config/values/types/ColorValue.hpp>
@@ -105,7 +106,6 @@ void registerHyprexpoConfigValues() {
     addConfigValue(makeShared<Config::Values::CIntValue>("plugin:hyprexpo:tile_rounding", "tile rounding", HyprexpoConfig::TILE_ROUNDING_DEFAULT));
     addConfigValue(makeShared<Config::Values::CFloatValue>("plugin:hyprexpo:tile_rounding_power", "tile rounding power", HyprexpoConfig::TILE_ROUNDING_POWER_DEFAULT));
     addConfigValue(makeShared<Config::Values::CFloatValue>("plugin:hyprexpo:ribbon_scale", "workspace ribbon tile scale", HyprexpoConfig::RIBBON_SCALE_DEFAULT));
-    addConfigValue(makeShared<Config::Values::CFloatValue>("plugin:hyprexpo:drawer_resist", "rubber-band factor for deep drawer pulls (0-1)", HyprexpoConfig::DRAWER_RESIST_DEFAULT));
     addConfigValue(makeShared<Config::Values::CIntValue>("plugin:hyprexpo:tile_rounding_focus", "focus tile rounding", HyprexpoConfig::TILE_ROUNDING_FOCUS_DEFAULT));
     addConfigValue(makeShared<Config::Values::CIntValue>("plugin:hyprexpo:tile_rounding_current", "current tile rounding", HyprexpoConfig::TILE_ROUNDING_CURRENT_DEFAULT));
     addConfigValue(makeShared<Config::Values::CIntValue>("plugin:hyprexpo:tile_rounding_hover", "hover tile rounding", HyprexpoConfig::TILE_ROUNDING_HOVER_DEFAULT));
@@ -152,10 +152,9 @@ void registerHyprexpoConfigValues() {
     addConfigValue(makeShared<Config::Values::CIntValue>("plugin:hyprexpo:keynav_wrap_v", "key navigation vertical wrap", HyprexpoConfig::KEYNAV_WRAP_V_DEFAULT));
     // default off: spatial moves by default
     addConfigValue(makeShared<Config::Values::CIntValue>("plugin:hyprexpo:keynav_reading_order", "key navigation reading order", HyprexpoConfig::KEYNAV_READING_ORDER_DEFAULT));
-    // in-expose app drawer (ribbon on top, search middle, grid bottom)
-    addConfigValue(makeShared<Config::Values::CIntValue>("plugin:hyprexpo:drawer_enable", "app drawer section toggle", HyprexpoConfig::DRAWER_ENABLE_DEFAULT));
-    addConfigValue(makeShared<Config::Values::CIntValue>("plugin:hyprexpo:drawer_columns", "app grid columns", HyprexpoConfig::DRAWER_COLUMNS_DEFAULT));
-    addConfigValue(makeShared<Config::Values::CIntValue>("plugin:hyprexpo:drawer_search_h", "search strip height px", HyprexpoConfig::DRAWER_SEARCH_H_DEFAULT));
-    addConfigValue(makeShared<Config::Values::CIntValue>("plugin:hyprexpo:drawer_expand_px", "drag distance px that expands/collapses the drawer", HyprexpoConfig::DRAWER_EXPAND_PX_DEFAULT));
-    addConfigValue(makeShared<Config::Values::CIntValue>("plugin:hyprexpo:drawer_icon_px", "app icon px", HyprexpoConfig::DRAWER_ICON_PX_DEFAULT));
+    // On-screen keyboard layer passthrough: comma-separated layer namespaces
+    // that taps fall through to while the overview is open (default filled).
+    addConfigValue(makeShared<Config::Values::CStringValue>("plugin:hyprexpo:osk_namespaces", "OSK layer namespaces", "wvkbd"));
+    // Addon-owned keys (drawer sheet); registered from the addon itself.
+    CDrawerAddon::registerConfig();
 }

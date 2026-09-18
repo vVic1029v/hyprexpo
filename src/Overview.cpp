@@ -4,6 +4,7 @@
 #include "HyprlandConfigCompat.hpp"
 #include "HyprexpoConfig.hpp"
 #include "ConfigValues.hpp"
+#include "OskLayer.hpp"
 #include "OverviewInternal.hpp"
 #include "OverviewCapture.hpp"
 #include "HyprexpoLogic.hpp"
@@ -1038,52 +1039,16 @@ namespace {
 // Ribbon: workspace tiles live in the top slice only; the search strip
 // and app drawer own everything below it. Tiles are deterministic 16:10
 // slots (never stretched), scaled up for touch, vertically centered in the
-// space above the docked search strip. Slots beyond `cols` do not exist
-// (empty box, unhittable). Gaps are doubled vs the grid default: finger
-// sized padding between tiles.
-double ribbonGap(double gap) {
-    return gap * 2.0;
-}
+// space above the docked search strip. Geometry itself is pure logic
+// (Hyprexpo::Ribbon, unit-tested); only the scale factor is read live so
+// `hyprctl keyword` keeps working.
 float ribbonScale() {
     const float scale = Hyprexpo::ConfigValues::getFloat("plugin:hyprexpo:ribbon_scale", HyprexpoConfig::RIBBON_SCALE_DEFAULT);
     return scale > 0.0F ? scale : HyprexpoConfig::RIBBON_SCALE_DEFAULT;
 }
-// Shared slot layout: tile size from `cols` (config columns, never
-// stretched), row width from `count` (pannable slots). scrollX pans the
-// strip when the scaled row overflows the output; otherwise the row stays
-// centered and scrollX is ignored.
-void ribbonTileSize(const Vector2D& total, int cols, double gap, double outer, double& tileW, double& tileH) {
-    if (cols < 1)
-        cols = 1;
-    const double rgap = ribbonGap(gap);
-    tileW             = std::max(1.0, (total.x - 2.0 * outer - (double)(cols - 1) * rgap) / (double)cols) * ribbonScale();
-    tileH             = tileW * 10.0 / 16.0;
-}
-double ribbonRowWidthForCount(double tileW, double rgap, int count) {
-    if (count < 1)
-        count = 1;
-    return (double)count * tileW + (double)(count - 1) * rgap;
-}
-double ribbonMaxScrollFor(const Vector2D& total, int cols, int count, double gap, double outer) {
-    double tileW, tileH;
-    ribbonTileSize(total, cols, gap, outer, tileW, tileH);
-    const double rowW = ribbonRowWidthForCount(tileW, ribbonGap(gap), count);
-    if (rowW <= total.x)
-        return 0.0;
-    return rowW - (total.x - 2.0 * outer);
-}
-void ribbonLayout(const Vector2D& total, int cols, int count, double gap, double outer, double searchH, double rowH, double scrollX, double& x0,
-                  double& y0, double& tileW, double& tileH) {
-    const double rgap = ribbonGap(gap);
-    ribbonTileSize(total, cols, gap, outer, tileW, tileH);
-    const double rowW      = ribbonRowWidthForCount(tileW, rgap, count);
-    const double maxScroll = rowW <= total.x ? 0.0 : rowW - (total.x - 2.0 * outer);
-    if (maxScroll <= 0.0)
-        x0 = (total.x - rowW) / 2.0;
-    else
-        x0 = outer - std::clamp(scrollX, 0.0, maxScroll);
-    const double availH = total.y - 16.0 - rowH - 12.0 - searchH; // above docked search
-    y0                  = std::max(outer, (availH - tileH) / 2.0);
+// Thin adapter: Vector2D in, pure strip out.
+Hyprexpo::Ribbon::SStrip ribbonStrip(const Vector2D& total, int cols, int count, double gap, double outer, double searchH, double rowH, double scrollX) {
+    return Hyprexpo::Ribbon::layoutStrip(total.x, total.y, cols, count, gap, outer, searchH, rowH, scrollX, (double)ribbonScale());
 }
 } // namespace
 
@@ -1099,11 +1064,31 @@ int COverview::ribbonCount() const {
     return count;
 }
 
+// Region map: ribbon band first, then the drawer addon's bands below.
+// Session code never looks past the addon interface beyond this mapping.
+COverview::ERegion COverview::regionAtPoint(const Vector2D& local) const {
+    const auto MON = pMonitor.lock();
+    if (!MON)
+        return ERegion::None;
+    const double H = MON->m_size.y;
+    if (local.x < 0 || local.x >= MON->m_size.x || local.y < 0 || local.y >= H)
+        return ERegion::None;
+    if (!drawer.hidesRibbon() && local.y < ribbonH())
+        return ERegion::Ribbon;
+    switch (drawer.classifyBelowRibbon(local)) {
+        case Hyprexpo::Addon::EBandRegion::Search: return ERegion::Search;
+        case Hyprexpo::Addon::EBandRegion::Grid:   return ERegion::Grid;
+        default:                                   return ERegion::None;
+    }
+}
+
 double COverview::ribbonMaxScroll() const {
     const auto MON = pMonitor.lock();
     if (!MON)
         return 0.0;
-    return ribbonMaxScrollFor(MON->m_size, std::max(1, currentGridShape().cols), ribbonCount(), (double)GAP_WIDTH, currentOuterInset());
+    return ribbonStrip(MON->m_size, std::max(1, currentGridShape().cols), ribbonCount(), (double)GAP_WIDTH, currentOuterInset(), drawer.searchH(), drawer.rowH(),
+                       ribbonScrollX)
+        .maxScroll;
 }
 
 void COverview::ribbonScrollBy(double deltaPx) {
@@ -1133,27 +1118,23 @@ void COverview::ribbonScrollToWorkspace(int wsid) {
     if (id < 0)
         return;
     const double outer = (double)std::max(0, Hyprexpo::ConfigValues::getInt("plugin:hyprexpo:gaps_out", HyprexpoConfig::GAPS_OUT_DEFAULT));
-    const int    cols          = std::max(1, currentGridShape().cols);
-    const int    count         = ribbonCount();
+    const int    cols  = std::max(1, currentGridShape().cols);
+    const int    count = ribbonCount();
     if (count <= 0)
         return;
-    double x0, y0, tileW, tileH;
-    ribbonLayout(MON->m_size, cols, count, (double)GAP_WIDTH, outer, searchH(), drawerRowH(), 0.0, x0, y0, tileW, tileH);
-    const double rgap   = ribbonGap((double)GAP_WIDTH);
-    const double center = x0 + (double)id * (tileW + rgap) + tileW / 2.0;
-    const double max    = ribbonMaxScrollFor(MON->m_size, cols, count, (double)GAP_WIDTH, outer);
-    ribbonScrollX       = max <= 0.0 ? 0.0 : std::clamp(center - MON->m_size.x / 2.0, 0.0, max);
+    const auto   strip  = ribbonStrip(MON->m_size, cols, count, (double)GAP_WIDTH, outer, drawer.searchH(), drawer.rowH(), 0.0);
+    const double center = strip.x0 + (double)id * (strip.tileW + Hyprexpo::Ribbon::GAP_MULTIPLIER * (double)GAP_WIDTH) + strip.tileW / 2.0;
+    ribbonScrollX       = strip.maxScroll <= 0.0 ? 0.0 : std::clamp(center - MON->m_size.x / 2.0, 0.0, strip.maxScroll);
 }
 
 double COverview::ribbonH() const {
     const auto MON = pMonitor.lock();
     if (!MON)
         return 0.0;
-    const int cols = std::max(1, currentGridShape().cols);
-    double x0, y0, tileW, tileH;
-    ribbonLayout(MON->m_size, cols, ribbonCount(), (double)GAP_WIDTH, currentOuterInset(), searchH(), drawerRowH(), ribbonScrollX, x0, y0, tileW,
-                 tileH);
-    return y0 + tileH;
+    const auto strip =
+        ribbonStrip(MON->m_size, std::max(1, currentGridShape().cols), ribbonCount(), (double)GAP_WIDTH, currentOuterInset(), drawer.searchH(), drawer.rowH(),
+                    ribbonScrollX);
+    return strip.y0 + strip.tileH;
 }
 
 CBox COverview::tileBoxForIndex(int id, const Vector2D& totalSize, double gap, double outerInset, bool centerPartialRows) const {
@@ -1163,28 +1144,17 @@ CBox COverview::tileBoxForIndex(int id, const Vector2D& totalSize, double gap, d
     const int cols = std::max(1, currentGridShape().cols);
     if (id < 0 || id >= ribbonCount())
         return CBox{{0, 0}, {0, 0}};
-    double x0, y0, tileW, tileH;
-    ribbonLayout(totalSize, cols, ribbonCount(), gap, outerInset, searchH(), drawerRowH(), ribbonScrollX, x0, y0, tileW, tileH);
-    const double rgap = ribbonGap(gap);
-    return CBox{{x0 + id * (tileW + rgap), y0}, {tileW, tileH}};
+    const auto   strip = ribbonStrip(totalSize, cols, ribbonCount(), gap, outerInset, drawer.searchH(), drawer.rowH(), ribbonScrollX);
+    const double rgap  = Hyprexpo::Ribbon::GAP_MULTIPLIER * gap;
+    return CBox{{strip.x0 + id * (strip.tileW + rgap), strip.y0}, {strip.tileW, strip.tileH}};
 }
 
 int COverview::tileIndexAtPoint(const Vector2D& point, const Vector2D& totalSize, double gap, double outerInset, bool centerPartialRows) const {
     (void)centerPartialRows;
-    const int cols = std::max(1, currentGridShape().cols);
-    double x0, y0, tileW, tileH;
-    ribbonLayout(totalSize, cols, ribbonCount(), gap, outerInset, searchH(), drawerRowH(), ribbonScrollX, x0, y0, tileW, tileH);
-    const double rgap = ribbonGap(gap);
-    const double lx   = point.x - x0;
-    const double ly   = point.y - y0;
-    if (lx < 0 || ly < 0 || ly >= tileH)
-        return -1;
-    const int slot = (int)(lx / (tileW + rgap));
-    if (slot < 0 || slot >= ribbonCount())
-        return -1;
-    if (lx - slot * (tileW + rgap) > tileW)
-        return -1;
-    if (slot >= (int)images.size())
+    const int  cols  = std::max(1, currentGridShape().cols);
+    const auto strip = ribbonStrip(totalSize, cols, ribbonCount(), gap, outerInset, drawer.searchH(), drawer.rowH(), ribbonScrollX);
+    const int  slot  = Hyprexpo::Ribbon::slotIndexAtPoint(point.x - strip.x0, point.y - strip.y0, strip, gap, ribbonCount());
+    if (slot < 0 || slot >= (int)images.size())
         return -1;
     return slot;
 }
@@ -1214,13 +1184,12 @@ Vector2D COverview::zoomPosForTile(int id, const Vector2D& canvasSize) const {
     const auto MON = pMonitor.lock();
     if (!MON)
         return {0, 0};
-    const int cols  = std::max(1, currentGridShape().cols);
     const int count = std::max(1, ribbonCount());
     id              = std::clamp(id, 0, count - 1);
-    double x0, y0, tileW, tileH;
-    ribbonLayout(canvasSize, cols, count, 0.0, 0.0, searchH(), drawerRowH(), ribbonScrollX, x0, y0, tileW, tileH);
-    const double cx = x0 + (double)id * tileW + tileW / 2.0; // gap is 0 at zoom framing
-    const double cy = y0 + tileH / 2.0;
+    const auto strip =
+        ribbonStrip(canvasSize, std::max(1, currentGridShape().cols), count, 0.0, 0.0, drawer.searchH(), drawer.rowH(), ribbonScrollX);
+    const double cx = strip.x0 + (double)id * strip.tileW + strip.tileW / 2.0; // gap is 0 at zoom framing
+    const double cy = strip.y0 + strip.tileH / 2.0;
     return {(MON->m_size.x / 2.0 - cx) * MON->m_scale, (MON->m_size.y / 2.0 - cy) * MON->m_scale};
 }
 
@@ -1231,7 +1200,7 @@ COverview::~COverview() {
     }
     Render::GL::g_pHyprOpenGL->makeEGLCurrent();
     images.clear(); // otherwise we get a vram leak
-    drawerClearCaches();
+    drawer.onClose();
     Pointer::Cursor::overrideController->unsetOverride(Pointer::Cursor::CURSOR_OVERRIDE_UNKNOWN);
     ensureOverviewCursorVisible(false, true);
     if (const auto MON = pMonitor.lock()) {
@@ -1241,7 +1210,7 @@ COverview::~COverview() {
     resetSubmapIfNeeded();
 }
 
-COverview::COverview(PHLWORKSPACE startedOn_, PHLMONITOR monitor_, bool swipe_, uint64_t sessionGeneration) : startedOn(startedOn_), m_sessionGeneration(sessionGeneration), swipe(swipe_) {
+COverview::COverview(PHLWORKSPACE startedOn_, PHLMONITOR monitor_, bool swipe_, uint64_t sessionGeneration) : startedOn(startedOn_), m_sessionGeneration(sessionGeneration), swipe(swipe_), drawer(this) {
     const auto PMONITOR = monitor_;
     pMonitor            = PMONITOR;
 
@@ -1512,7 +1481,7 @@ COverview::COverview(PHLWORKSPACE startedOn_, PHLMONITOR monitor_, bool swipe_, 
     updateHoveredFromMouse();
     kbFocusID = openedID;
 
-    drawerRescan();
+    drawer.onOpen();
 
     auto onCursorMove = [this](Event::SCallbackInfo& info) {
         if (closing)
@@ -1527,19 +1496,24 @@ COverview::COverview(PHLWORKSPACE startedOn_, PHLMONITOR monitor_, bool swipe_, 
             if (!MON || OV->closing)
                 continue;
             const Vector2D newLocal = GLOBAL - MON->m_position;
-            if (OV->drawer.mouseArmed) {
-                const auto dd = newLocal - OV->lastMousePosLocal;
-                if (std::hypot(dd.x, dd.y) >= 12.0)
-                    OV->drawer.mouseMoved = true;
-                if (OV->drawer.mouseMoved)
-                    OV->drawerPullBy(dd.y);
-            }
-            OV->lastMousePosLocal = newLocal;
+            const Vector2D dd       = newLocal - OV->lastMousePosLocal;
+            OV->lastMousePosLocal   = newLocal;
+            if (Hyprexpo::Osk::pointHitsKeyboard(MON, GLOBAL))
+                continue; // on the keyboard layer: hands off entirely
+            if (OV->drawer.pointerDragActive())
+                OV->drawer.pointerMove(dd);
             OV->updateHoveredFromMouse();
         }
 
-        if (info.cancelled || !dynamic_cast<COverview*>(pointerOverview()))
+        if (info.cancelled)
             return;
+        auto* const POV = dynamic_cast<COverview*>(pointerOverview());
+        if (!POV)
+            return;
+        if (const auto PMON = POV->monitor()) {
+            if (Hyprexpo::Osk::pointHitsKeyboard(PMON, GLOBAL))
+                return; // on the keyboard layer: hands off entirely
+        }
         info.cancelled = true;
         ensureOverviewCursorVisible();
 
@@ -1559,7 +1533,12 @@ COverview::COverview(PHLWORKSPACE startedOn_, PHLMONITOR monitor_, bool swipe_, 
         auto* const    SOURCE = gridOverviewForMonitorKey(g_overviewDrag.state.sourceMonitorKey);
         if (!TARGET && !SOURCE)
             return;
-
+        if (TARGET) {
+            if (const auto TMON = TARGET->monitor()) {
+                if (Hyprexpo::Osk::pointHitsKeyboard(TMON, GLOBAL))
+                    return; // keyboard layer: hands off before consuming
+            }
+        }
         info.cancelled = true;
 
         // If expo hasn't animated in enough to be visible, close silently without
@@ -1570,35 +1549,27 @@ COverview::COverview(PHLWORKSPACE startedOn_, PHLMONITOR monitor_, bool swipe_, 
             return;
         }
 
-        // Drawer region first: taps launch/focus, right-click pins, presses
-        // arm for scroll — the window-drag path below must not see them.
+        // Drawer region first: taps launch/focus, presses arm for
+        // pull — the window-drag path below must not see them.
         if (TARGET) {
             if (const auto TMON = TARGET->monitor()) {
                 const auto local  = GLOBAL - TMON->m_position;
                 const auto region = TARGET->regionAtPoint(local);
                 if (region == COverview::ERegion::Search) {
-                    TARGET->drawer.searchFocused = true;
-                    TARGET->damage();
+                    TARGET->drawer.focusSearch();
                     return;
                 }
                 if (region == COverview::ERegion::Grid) {
                     if (event.state == WL_POINTER_BUTTON_STATE_PRESSED) {
-                        if (event.button == 0x111) {
-                            return; // right button: intentionally nothing (no pin system)
-                        } else {
-                            TARGET->drawer.mouseArmed = true;
-                            TARGET->drawer.mouseApp = TARGET->drawerAppAt(local);
-                            TARGET->drawer.mouseDown = local;
-                            TARGET->drawer.mouseMoved = false;
-                            TARGET->drawerPullBegin();
-                        }
-                    } else if (TARGET->drawer.mouseArmed) {
-                        TARGET->drawer.mouseArmed = false;
-                        TARGET->drawerDragEnd();
-                        if (!TARGET->drawer.mouseMoved)
-                            TARGET->drawerTap(local);
+                        TARGET->drawer.pointerDown(local, event.button);
+                        return;
                     }
-                    return;
+                    // A release only belongs to the drawer when it armed
+                    // the pull; otherwise a window drag may end here.
+                    if (TARGET->drawer.pointerDragActive()) {
+                        TARGET->drawer.pointerUp(local);
+                        return;
+                    }
                 }
             }
         }
@@ -1635,8 +1606,11 @@ COverview::COverview(PHLWORKSPACE startedOn_, PHLMONITOR monitor_, bool swipe_, 
         if (!TARGET || TARGET->closing)
             return;
 
+        const Vector2D downGlobal = MON->m_position + event.pos * MON->m_size;
+        if (Hyprexpo::Osk::pointHitsKeyboard(MON, downGlobal))
+            return; // keyboard layer: no press, no consume, delivery proceeds
         info.cancelled = true;
-        TARGET->touchPressDown(event.touchID, MON->m_position + event.pos * MON->m_size, MON);
+        TARGET->touchPressDown(event.touchID, downGlobal, MON);
     };
 
     mouseMoveHook = Event::bus()->m_events.input.mouse.move.listen([onCursorMove](const Vector2D&, Event::SCallbackInfo& info) { onCursorMove(info); });
@@ -1649,6 +1623,25 @@ COverview::COverview(PHLWORKSPACE startedOn_, PHLMONITOR monitor_, bool swipe_, 
             if (session && session->ownsTouchInput(event.touchID))
                 return;
         }
+        // Unowned touch over the keyboard layer (press went straight to
+        // the client): keep hands off so down/move/up stay consistent.
+        // event.pos is output-normalized; test it against every overview
+        // monitor (exact with one monitor, harmless approximation after).
+        bool overOsk = false;
+        for (const auto& session : g_overviews) {
+            auto* const SOV = dynamic_cast<COverview*>(session.get());
+            if (!SOV)
+                continue;
+            const auto SMON = SOV->monitor();
+            if (!SMON)
+                continue;
+            if (Hyprexpo::Osk::pointHitsKeyboard(SMON, SMON->m_position + event.pos * SMON->m_size)) {
+                overOsk = true;
+                break;
+            }
+        }
+        if (overOsk)
+            return;
         onCursorMove(info);
     });
     mouseButtonHook = Event::bus()->m_events.input.mouse.button.listen([onCursorSelect](const IPointer::SButtonEvent& event, Event::SCallbackInfo& info) { onCursorSelect(event, info); });
@@ -1678,6 +1671,8 @@ COverview::COverview(PHLWORKSPACE startedOn_, PHLMONITOR monitor_, bool swipe_, 
             const auto MON = OV->monitor();
             if (!MON)
                 continue;
+            if (Hyprexpo::Osk::pointHitsKeyboard(MON, GLOBAL))
+                continue; // keyboard layer: falls through untouched
             const auto region = OV->regionAtPoint(GLOBAL - MON->m_position);
             // Mouse wheels tick in coarse steps (amplify); touchpads stream
             // pixel-true deltas (use as-is) so a short swipe can't blow past
@@ -1699,18 +1694,11 @@ COverview::COverview(PHLWORKSPACE startedOn_, PHLMONITOR monitor_, bool swipe_, 
                 continue;
             // wheel has no press point: engagement is scroll position only
             // (top of the list may close, deeper never does).
-            OV->drawerScrollBy(steps);
+            OV->drawer.wheel(steps);
             // The pointer didn't move, so the highlight would sit on the
             // wrong app after the content shifted: refresh it from the
             // cursor like a mouse move would.
-            {
-                const Vector2D local = GLOBAL - MON->m_position;
-                const int      idx   = OV->drawerAppAt(local);
-                if (idx != OV->drawer.hoverApp) {
-                    OV->drawer.hoverApp = idx;
-                    OV->damage();
-                }
-            }
+            OV->drawer.updateHover(GLOBAL - MON->m_position);
             info.cancelled = true;
             return;
         }

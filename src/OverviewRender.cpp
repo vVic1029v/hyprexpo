@@ -293,7 +293,7 @@ void COverview::fullRender() {
     // the app grid owns the surface. Threshold mirrors regionAtPoint(),
     // keeping pixels and hit-testing in agreement.
     bool entryAnimationPending = false;
-    if (drawer.anim < 0.5f) {
+    if (!drawer.hidesRibbon()) {
     std::vector<CBox> tileBoxes(images.size());
     const bool        entryAnimationActive = animateEntry && !closing;
     const double entryElapsed = entryAnimationActive ? std::chrono::duration<double>(std::chrono::steady_clock::now() - createdAt).count() : 0.0;
@@ -701,8 +701,8 @@ void COverview::fullRender() {
 
     } // showRibbon (drawer fitted hides the workspace ribbon)
 
-    drawerStepAnim();
-    renderDrawerPass();
+    drawer.stepFrame();
+    drawer.renderPass();
 
     if (entryAnimationPending)
         damage();

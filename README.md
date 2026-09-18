@@ -318,6 +318,11 @@ make dev-build
 - **Dispatchers.** `hyprexpo:drawer expand|collapse|toggle` animates the
   sheet through the same pull engine (never closes the overview itself);
   use `hyprexpo:expo` to open/close/toggle the overview.
+- **On-screen keyboard.** Taps landing on a known keyboard layer surface
+  (`plugin:hyprexpo:osk_namespaces`, default filled with `wvkbd`, plus
+  first-detect auto-learn) fall through to the client instead of being
+  swallowed, so an OSK works inside the overview. Virtual-keyboard keys
+  flow into the drawer search box as usual.
 
 ## Next Steps
 

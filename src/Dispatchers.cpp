@@ -618,13 +618,8 @@ static SDispatchResult onDrawerDispatcher(std::string arg) {
     auto* const OV = dynamic_cast<COverview*>(activeOverview());
     if (!OV)
         return {};
-    arg = trimString(arg);
-    if (arg == "expand")
-        OV->drawerSetFitted(true);
-    else if (arg == "collapse")
-        OV->drawerSetFitted(false);
-    else
-        OV->drawerSetFitted(!OV->drawer.fitted);
+    // Behavior lives in the addon; registration stays here with the rest.
+    OV->drawer.onDrawerCommand(trimString(arg));
     return {};
 }
 

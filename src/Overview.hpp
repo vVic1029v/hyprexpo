@@ -4,6 +4,7 @@
 
 #include "globals.hpp"
 #include "Drawer.hpp"
+#include "DrawerAddon.hpp"
 #include "IOverviewSession.hpp"
 #include "HyprexpoLogic.hpp"
 #include <hyprland/src/desktop/DesktopTypes.hpp>
@@ -135,82 +136,22 @@ class COverview final : public IOverviewSession {
     // band); then a thin search strip; the app grid owns everything below.
     enum class ERegion { None, Ribbon, Search, Grid };
 
-    struct SDrawerState {
-        bool        fitted       = false;  // docked: 1 pinned row; fitted: fill + scroll
-        float       anim         = 0.f;    // 0 docked -> 1 fitted, stepped per frame
-        double      lastStepS    = 0.0;    // last anim step timestamp (0 = unset)
-        double      scroll       = 0.0;    // content scroll px (fitted only)
-        double      lastPullS    = 0.0;    // last pull input (any source); snap-back runs past idle
-        double      pullVisual   = 0.0;    // live sheet offset px, follows the push
-        bool        pulling      = false;  // a pull drag is in flight
-        bool        pullEngaged  = false;  // latched at press: may commit open/close
-        bool        scanned      = false;  // app model scanned for this open
-        int         hoverApp     = -1;     // filtered-list index under pointer
-        bool        searchFocused = false;
-        std::string query;
-        bool        queryDirty   = true;
-        // model (rescanned per overview open) + texture caches (cleared on close)
-        std::vector<Hyprexpo::Drawer::SApp>      apps;
-        std::vector<std::string>                 recent;     // launch history, most-recent-first
-        std::vector<size_t>                      order;      // positions (EMPTY_SLOT = recent-row hole)
-        int                                      recentShown = 0; // leading recent tiles in order
-        std::map<std::string, SP<Render::ITexture>> iconTex;
-        std::map<std::string, SP<Render::ITexture>> labelTex;
-        SP<Render::ITexture>                       searchTex;
-        // mouse drawer press (parallel to the touch press above)
-        bool     mouseArmed = false;
-        int      mouseApp   = -1;
-        Vector2D mouseDown{};
-        bool     mouseMoved = false;
-    };
-    SDrawerState drawer;
+    // App drawer addon (search + app grid sheet). Replaces the old inline
+    // SDrawerState + drawer* methods: session code uses OV->drawer through
+    // IOverviewAddon and never reaches past it.
+    CDrawerAddon drawer;
 
     // Ribbon geometry: workspace tiles live in the top band only. All tile
     // math flows through tileBoxForIndex/tileIndexAtPoint, so every consumer
     // (render, hover, drag, labels, damage) follows automatically.
+    // Region map: ribbon band first, then the drawer addon's bands below.
+    ERegion    regionAtPoint(const Vector2D& local) const;
     double     ribbonH() const;
     int        ribbonCount() const; // pannable slots: trailing-trimmed valid tiles
     double     ribbonMaxScroll() const; // pan range px (0 when the strip fits)
     void       ribbonScrollBy(double deltaPx); // wheel: content moves against delta
     void       ribbonPanBy(double fingerDx);   // touch: content follows the finger
     void       ribbonScrollToWorkspace(int wsid); // center the tile (open-time)
-    double     searchH() const;
-    double     searchTop() const;   // y where the search strip starts
-    double     drawerTop() const;   // y where the app grid starts (incl. live pull)
-    double     drawerPullSpan() const; // full docked<->fitted travel px
-    double     drawerPullThreshold() const; // commit travel: quarter screen (config floor)
-    ERegion    regionAtPoint(const Vector2D& local) const;
-    // Drawer grid geometry + hit test (index into drawer.order, -1 none).
-    int        drawerCols() const;
-    double     drawerTileW() const;
-    double     drawerRowH() const;
-    double     drawerClipH() const;  // visible grid height (animates on snap)
-    double     drawerContentH() const;
-    double     drawerMaxScroll() const;
-    int        drawerAppAt(const Vector2D& local) const;
-    bool       drawerRecentPad() const; // padded gap after the recent row
-    CBox       drawerTileBox(int orderIdx) const;
-    void       drawerRescan();
-    void       drawerRefilter();
-    void       drawerClearCaches();
-    void       drawerSetFitted(bool fitted);
-    void       drawerScrollBy(double fingerDy); // wheel/touchpad: visual pull + detent, idle snap-back
-    void       drawerPullBegin();               // Grid press: latch close permission from scroll pos
-    void       drawerPullBy(double fingerDy);   // mouse/touch drag: follows finger
-    void       drawerDragEnd(bool commit = true); // release: commit or snap back
-    void       commitDrawerPull(bool open, double span); // shared commit, seeds anim from live pos
-    double     drawerPullStamp(); // note pull-input time, returns now (seconds)
-    double     drawerListScroll(double fingerDy); // scroll list, returns overshoot past top
-    void       drawerTap(const Vector2D& local);
-    void       drawerLaunch(size_t orderIdx);
-    void       drawerTypeText(const std::string& text);
-    void       drawerBackspace();
-    void       drawerClearQuery();
-    bool       drawerConfirmTop();
-    void       renderDrawerPass();
-    void       drawerStepAnim();
-    SP<Render::ITexture> drawerIconTexture(const Hyprexpo::Drawer::SApp& app, int px, double scale);
-    SP<Render::ITexture> drawerLabelTexture(const Hyprexpo::Drawer::SApp& app, double scale);
 
   private:
     // Touch hold-to-drag wrapper (classic grid path): a touch down only

@@ -76,13 +76,11 @@ void COverview::updateHoveredFromMouse() {
         return;
 
     const int newHoveredID = tileIndexAtPoint(lastMousePosLocal, size->value(), GAP_WIDTH, currentOuterInset(), true);
-    const int newApp = drawerAppAt(lastMousePosLocal);
-    if (newHoveredID == hoveredID && newApp == drawer.hoverApp)
-        return;
-
-    hoveredID = newHoveredID;
-    drawer.hoverApp = newApp;
-    damage();
+    if (newHoveredID != hoveredID) {
+        hoveredID = newHoveredID;
+        damage();
+    }
+    drawer.updateHover(lastMousePosLocal);
 }
 
 void COverview::ensureKbFocusInitialized() {
@@ -389,7 +387,7 @@ void COverview::touchPressDown(int32_t touchID, const Vector2D& global, const PH
     touchPress.region      = (int)regionAtPoint(global - monitor->m_position);
     touchPress.appIndex    = -1;
     if (touchPress.region == (int)ERegion::Grid)
-        drawerPullBegin();
+        drawer.touchDown(global - monitor->m_position);
     // hover feedback under the finger while undecided
     lastMousePosLocal = global - monitor->m_position;
     updateHoveredFromMouse();
@@ -438,15 +436,9 @@ void COverview::touchPressMotion(int32_t touchID, const Vector2D& global) {
         // Vertical finger motion pulls the drawer (release decides
         // open vs snap-back). Close permission was latched at press
         // from the scroll position; pass only the displacement.
-        drawerPullBy(dy);
-        const auto MON = touchPress.monitor.lock();
-        if (MON) {
-            const int idx = drawerAppAt(global - MON->m_position);
-            if (idx != drawer.hoverApp) {
-                drawer.hoverApp = idx;
-                damage();
-            }
-        }
+        drawer.touchMotion(dy);
+        if (const auto MON = touchPress.monitor.lock())
+            drawer.updateHover(global - MON->m_position);
         return;
     }
     if (touchPress.region != (int)ERegion::Ribbon)
@@ -522,16 +514,11 @@ void COverview::touchPressUp(int32_t touchID) {
         return;
     const Vector2D upLocal = upGlobal - mon->m_position;
     if (region == (int)COverview::ERegion::Grid) {
-        OWNER->drawerDragEnd();
-        const auto md = upGlobal - downGlobal;
-        if (std::hypot(md.x, md.y) >= 12.0)
-            return; // was a pull, not a tap
-        OWNER->drawerTap(upLocal);
+        OWNER->drawer.touchUp(upLocal, upGlobal - downGlobal);
         return;
     }
     if (region == (int)COverview::ERegion::Search) {
-        OWNER->drawer.searchFocused = true;
-        OWNER->damage();
+        OWNER->drawer.focusSearch();
         return;
     }
     if (wasPanning)
@@ -567,14 +554,8 @@ void COverview::touchPressCancel(int32_t touchID) {
     auto* const OWNER = touchOwner(touchID);
     if (!OWNER)
         return;
-    if (OWNER->touchPress.region == (int)COverview::ERegion::Grid) {
-        OWNER->drawerDragEnd(false);
-        // Grace window, not a snap: the driver may re-press right after a
-        // cancel (stillness looks like abandonment). Stamping holds the
-        // sheet so a re-press continues the pull; true abandonment still
-        // springs back once the window lapses.
-        OWNER->drawerPullStamp();
-    }
+    if (OWNER->touchPress.region == (int)COverview::ERegion::Grid)
+        OWNER->drawer.touchCancel();
     if (OWNER->touchPress.dragging)
         resetOverviewDrag(Hyprexpo::EOverviewDragEventType::Cancel);
     OWNER->cancelTouchPress();
