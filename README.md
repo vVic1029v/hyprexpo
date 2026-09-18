@@ -184,7 +184,9 @@ make dev-build
   in-use workspace ID — no windows, no skipping, bottom-to-top. Pan with horizontal wheel / two-finger swipe, touchscreen swipe,
   or `hyprexpo:drawer`-style drags; touch rules are deterministic: sideways
   swipe always pans, only a still 350 ms hold picks a window up, anything
-  else never grabs or selects by accident.
+  else never grabs or selects by accident. Three-finger swipe up opens the
+  overview and swipe down closes it (touchscreen and touchpad alike); both
+  are idempotent — up never closes, down never opens.
 - **Pullable app drawer.** Search strip plus app grid live on one sheet
   that follows the finger. A pull only commits past a quarter of the screen
   height, otherwise it springs back — opening and closing, mouse, touch,
