@@ -484,6 +484,17 @@ void COverview::touchPressMotion(int32_t touchID, const Vector2D& global) {
     }
     if (touchPress.dragging) {
         updateWindowDragAt(global);
+        // Touchscreen only (this flag is touch-exclusive; mouse drags never
+        // set it): hovering a tile mid-drag focuses it (green outline), so
+        // the drop target — and any app opened after — lands on the workspace
+        // under the finger, no tap needed.
+        if (const auto MON = pMonitor.lock()) {
+            const int under = tileIndexAtPoint(global - MON->m_position, size->value(), GAP_WIDTH, currentOuterInset(), true);
+            if (under >= 0 && under != kbFocusID && isTileValid(under)) {
+                kbFocusID = under;
+                damage();
+            }
+        }
     } else {
         const auto MON = pMonitor.lock();
         if (!MON)
@@ -751,11 +762,12 @@ bool COverview::moveFocus(int dx, int dy) {
         return false;
 
     // Stateless linear walk: right/down = next valid tile, left/up =
-    // previous, wrapping at the ends. No grid shape, no wrap flags, no
-    // reading modes — arrows always land somewhere sane, including the
-    // trailing "+" tile (a valid neighbor past the range). The old
-    // shape-bound scans could bounce between two tiles or strand the
-    // focus when the shape disagreed with the provisioned images.
+    // previous, CLAMPED at the ends (never wraps: wrapping teleports the
+    // focus across the strip and the centering animation would slide the
+    // whole way back). No grid shape, no wrap flags, no reading modes —
+    // arrows always land somewhere sane, including the trailing "+" tile.
+    // The old shape-bound scans could bounce between two tiles or strand
+    // the focus when the shape disagreed with the provisioned images.
     int step = 0;
     if (dx > 0 || dy > 0)
         step = 1;
@@ -766,7 +778,9 @@ bool COverview::moveFocus(int dx, int dy) {
 
     const int total = (int)images.size();
     for (int tries = 0; tries < total; ++tries) {
-        const int idx = (kbFocusID + step * (tries + 1) % total + total) % total;
+        const int idx = kbFocusID + step * (tries + 1);
+        if (idx < 0 || idx >= total)
+            break; // end of the strip: stay put, no wrap
         if (isTileValid(idx)) {
             kbFocusID = idx;
             return true;

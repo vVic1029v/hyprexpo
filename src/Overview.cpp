@@ -764,7 +764,10 @@ std::optional<Hyprexpo::SGlobalTile> COverview::focusedGlobalTile() const {
     if (!MON || !isTileValid(kbFocusID))
         return std::nullopt;
 
-    const auto& BOX = images[kbFocusID].box;
+    // Live box, not the ctor-frozen images[].box: the strip pans, and hit
+    // testing must follow it or drags only start from the tiles visible at
+    // open time.
+    const auto BOX = tileBoxForIndex(kbFocusID, MON->m_size, GAP_WIDTH, currentOuterInset(), true);
     return Hyprexpo::SGlobalTile{
         .overviewKey   = overviewMonitorKey(MON),
         .tileIndex     = kbFocusID,
@@ -783,7 +786,9 @@ std::vector<Hyprexpo::SGlobalTile> COverview::globalTiles() const {
     for (size_t i = 0; i < images.size(); ++i) {
         if (!isTileValid(i))
             continue;
-        const auto& BOX = images[i].box;
+        // Live box (see above): stale boxes break drags past the tiles
+        // visible at open time.
+        const auto BOX = tileBoxForIndex((int)i, MON->m_size, GAP_WIDTH, currentOuterInset(), true);
         tiles.push_back({
             .overviewKey   = overviewMonitorKey(MON),
             .tileIndex     = static_cast<int>(i),
