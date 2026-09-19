@@ -879,12 +879,13 @@ void CDrawerAddon::renderPass() {
     const double tw = tileW();
     const double rh = rowH();
     const int iconPx = drawerCfgIconPx();
-    // Tiles fade out over nearly their own height as they slide under the
+    // Tiles fade out over more than their own height as they slide under the
     // search bar instead of popping whole: alpha tracks how much of the
-    // tile is still below the bar's bottom edge — fully visible until the
-    // top is half an icon past it, gone exactly when fully behind it.
+    // tile is still below the bar's bottom edge — fading starts while the
+    // top is still half an icon clear of it, gone exactly when fully
+    // behind it.
     const double barBottom = sTop + sH;
-    const double fadeSpan = std::max(1.0, rh - (double)iconPx / 2.0);
+    const double fadeSpan = std::max(1.0, rh + (double)iconPx / 2.0);
     for (size_t oi = 0; oi < state.order.size(); ++oi) {
         if (state.order[oi] == Hyprexpo::Drawer::EMPTY_SLOT)
             continue; // recent-row padding hole: no tile, no hit test
