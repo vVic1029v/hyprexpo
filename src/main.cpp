@@ -144,6 +144,21 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
 
         if (shouldSelectWorkspaceFromKey(event))
             info.cancelled = true;
+
+        // Ribbon keyboard nav (the lua config carries no submap): arrows
+        // move the tile focus, Enter confirms. Digits were handled above.
+        if (handleOverviewNavKey(event)) {
+            info.cancelled = true;
+            return;
+        }
+
+        // Modal exposé: everything else dies here, press and release, so
+        // apps behind receive nothing. Search/cancel/digits/nav were
+        // offered above; SUPER/XF86 keys pass through for binds.
+        if (swallowOverviewKey(event)) {
+            info.cancelled = true;
+            return;
+        }
     });
 
     static auto PCFG = Event::bus()->m_events.config.reloaded.listen([]() {

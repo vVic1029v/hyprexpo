@@ -306,6 +306,57 @@ bool shouldSelectWorkspaceFromKey(const IKeyboard::SKeyEvent& event) {
     return changeToSingleDigitWorkspace(arg).success;
 }
 
+// Ribbon keyboard nav for configs without the hyprexpo submap: arrows move
+// the tile focus, Enter confirms the focused tile. Search eats its own keys
+// first (caller order), digits were handled above; nothing else reaches here.
+bool handleOverviewNavKey(const IKeyboard::SKeyEvent& event) {
+    auto* const OV = activeOverview();
+    if (!OV || OV->closeCommitted() || OV->isSwiping() || event.state != WL_KEYBOARD_KEY_STATE_PRESSED)
+        return false;
+
+    const auto KEYBOARD = g_pSeatManager->m_keyboard.lock();
+    if (!KEYBOARD || !KEYBOARD->m_xkbState)
+        return false;
+
+    const xkb_keysym_t sym = xkb_state_key_get_one_sym(KEYBOARD->m_xkbState, event.keycode + 8);
+    const char*        dir = sym == XKB_KEY_Left    ? "left"
+                            : sym == XKB_KEY_Right ? "right"
+                            : sym == XKB_KEY_Up    ? "up"
+                            : sym == XKB_KEY_Down  ? "down"
+                                                   : nullptr;
+    if (dir) {
+        OV->onKbMoveFocus(dir);
+        return true;
+    }
+    if (sym == XKB_KEY_Return || sym == XKB_KEY_KP_Enter) {
+        if (OV->onKbConfirm())
+            closeOverviewsSelecting(OV);
+        return true;
+    }
+    return false;
+}
+
+// Modal exposé: while open, everything not handled above dies here (press
+// and release) so apps behind receive nothing. SUPER_L/R pass through for
+// the tap-toggle bind; XF86 media/brightness keys pass through to binds.
+bool swallowOverviewKey(const IKeyboard::SKeyEvent& event) {
+    auto* const OV = activeOverview();
+    if (!OV || OV->closeCommitted())
+        return false;
+    if (event.state != WL_KEYBOARD_KEY_STATE_PRESSED && event.state != WL_KEYBOARD_KEY_STATE_RELEASED)
+        return false;
+
+    const auto KEYBOARD = g_pSeatManager->m_keyboard.lock();
+    if (KEYBOARD && KEYBOARD->m_xkbState) {
+        const xkb_keysym_t sym = xkb_state_key_get_one_sym(KEYBOARD->m_xkbState, event.keycode + 8);
+        if (sym == XKB_KEY_Super_L || sym == XKB_KEY_Super_R)
+            return false;
+        if (sym >= 0x1008ff00 && sym <= 0x1008ffff)
+            return false; // XF86 media/brightness/etc.
+    }
+    return true;
+}
+
 static int luaDispatchResult(lua_State* L, const char* name, const SDispatchResult& result) {
     if (result.success)
         return 0;
