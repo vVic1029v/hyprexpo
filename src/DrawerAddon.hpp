@@ -40,6 +40,10 @@ class CDrawerAddon final : public Hyprexpo::Addon::IOverviewAddon {
     void pointerUp(const Vector2D& local) override;
 
     void wheel(double steps) override;
+    // Discrete touchpad open (docked only): burst accumulator that fires at
+    // the threshold. Separate from the analog wheel()/touch drag paths.
+    void wheelTouchOpen(double fingerDy);
+    bool isFitted() const { return state.fitted; }
     void updateHover(const Vector2D& local) override;
 
     void touchDown(const Vector2D& local) override;
@@ -66,6 +70,8 @@ class CDrawerAddon final : public Hyprexpo::Addon::IOverviewAddon {
         double      scroll       = 0.0;   // content scroll px (fitted only)
         double      lastPullS    = 0.0;   // last pull input (any source); snap-back runs past idle
         double      pullVisual   = 0.0;   // live sheet offset px, follows the push
+        double      wheelAcc     = 0.0;   // touchpad-open burst accumulation px
+        double      wheelAccS    = 0.0;   // last touchpad-open burst event timestamp
         bool        pulling      = false; // a pull drag is in flight
         bool        pullEngaged  = false; // latched at press: may commit open/close
         int         hoverApp     = -1;    // filtered-list position under pointer

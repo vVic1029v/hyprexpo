@@ -1520,11 +1520,14 @@ COverview::COverview(PHLWORKSPACE startedOn_, PHLMONITOR monitor_, bool swipe_, 
         }
     });
     mouseAxisHook = Event::bus()->m_events.input.mouse.axis.listen([](const IPointer::SAxisEvent& event, Event::SCallbackInfo& info) {
-        // Wheel / touchpad scroll: vertical over the drawer scrolls it (or
-        // snaps it docked<->fitted); horizontal over the ribbon pans the
-        // workspace strip. Vertical over the ribbon intentionally does
-        // nothing. Everywhere else the event falls through untouched.
+        // Wheel / touchpad scroll while the exposé is open. Vertical over
+        // the drawer pulls it (or snaps it docked<->fitted); horizontal over
+        // the ribbon pans the workspace strip; vertical over the ribbon does
+        // nothing. Everything the exposé doesn't act on is still CAPTURED,
+        // never passed to the apps behind: an open exposé owns scroll input.
+        // Only the on-screen keyboard falls through untouched.
         const Vector2D GLOBAL = g_pInputManager->getMouseCoordsInternal();
+        bool expoCapture = false;
         for (const auto& session : g_overviews) {
             auto* const OV = dynamic_cast<COverview*>(session.get());
             if (!OV || OV->closing)
@@ -1534,18 +1537,45 @@ COverview::COverview(PHLWORKSPACE startedOn_, PHLMONITOR monitor_, bool swipe_, 
                 continue;
             if (Hyprexpo::Osk::pointHitsKeyboard(MON, GLOBAL))
                 continue; // keyboard layer: falls through untouched
-            const auto region = OV->regionAtPoint(GLOBAL - MON->m_position);
-            // Mouse wheels tick in coarse steps (amplify); touchpads stream
-            // pixel-true deltas (use as-is) so a short swipe can't blow past
-            // the pull threshold and toggle the drawer by mistake.
-            const bool   discrete = event.source == WL_POINTER_AXIS_SOURCE_WHEEL || event.deltaDiscrete != 0;
-            const double steps    = event.delta * (discrete ? 4.0 : 1.0);
+            if (GLOBAL.x < MON->m_position.x || GLOBAL.y < MON->m_position.y || GLOBAL.x >= MON->m_position.x + MON->m_size.x ||
+                GLOBAL.y >= MON->m_position.y + MON->m_size.y)
+                continue; // another monitor's business, not ours
+            expoCapture = true;
+            // Latch the region per scroll burst like a touch press latches
+            // it at down: the sheet slides under a stationary cursor while
+            // pulling (top() rides pullVisual but the docked clip stays one
+            // row), so re-classifying every event would flip Grid->None
+            // mid-pull and starve the drawer. Only real silence relatches.
+            static ERegion      latchedRegion = ERegion::None;
+            static double       latchS        = 0.0;
+            const double        nowEv =
+                std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
+            if (nowEv - latchS > 0.5)
+                latchedRegion = OV->regionAtPoint(GLOBAL - MON->m_position);
+            latchS         = nowEv;
+            const auto region = latchedRegion;
+            // Mouse wheels tick in coarse steps; touchpads stream pixel-true
+            // deltas, boosted so a short flick still travels: the ribbon
+            // visibly pans, and one downward flick pulls the drawer past its
+            // detent. Touchscreen drags never reach this path (touchMotion),
+            // so finger feel is untouched by every factor below.
+            const bool discrete = event.source == WL_POINTER_AXIS_SOURCE_WHEEL || event.deltaDiscrete != 0;
+            double     raw      = event.delta;
+            if (!discrete && event.axis == WL_POINTER_AXIS_VERTICAL_SCROLL)
+                raw = -raw; // touchpads report natural-scroll deltas (content
+                            // follows fingers); the drawer speaks finger
+                            // down-positive like the touchscreen, so un-invert
+                            // here. (A setting read would be nicer, but the
+                            // compat layer only sees Config::INTEGER and the
+                            // live key is bool — it silently reads 0. This
+                            // machine runs natural_scroll on; revisit if that
+                            // ever changes.) Horizontal is already correct.
             if (region == COverview::ERegion::Ribbon) {
                 // Horizontal (touchpad two-finger / tilt wheel) pans the
-                // workspace strip; vertical falls through untouched.
+                // workspace strip; vertical falls through to capture.
                 if (event.axis != WL_POINTER_AXIS_HORIZONTAL_SCROLL)
                     continue;
-                OV->ribbonScrollBy(steps);
+                OV->ribbonScrollBy(raw * (discrete ? 4.0 : 2.5));
                 info.cancelled = true;
                 return;
             }
@@ -1554,8 +1584,15 @@ COverview::COverview(PHLWORKSPACE startedOn_, PHLMONITOR monitor_, bool swipe_, 
             if (event.axis == WL_POINTER_AXIS_HORIZONTAL_SCROLL)
                 continue;
             // wheel has no press point: engagement is scroll position only
-            // (top of the list may close, deeper never does).
-            OV->drawer.wheel(steps);
+            // (top of the list may close, deeper never does). A docked sheet
+            // takes the discrete open path (burst accumulator that fires at
+            // half threshold — touchpad and mouse alike, each scaled); a
+            // fitted sheet rides the analog detent (list scroll + close
+            // pull) as before.
+            if (!OV->drawer.isFitted())
+                OV->drawer.wheelTouchOpen(raw * (discrete ? 4.0 : 2.5));
+            else
+                OV->drawer.wheel(raw * (discrete ? 4.0 : 2.5));
             // The pointer didn't move, so the highlight would sit on the
             // wrong app after the content shifted: refresh it from the
             // cursor like a mouse move would.
@@ -1563,6 +1600,8 @@ COverview::COverview(PHLWORKSPACE startedOn_, PHLMONITOR monitor_, bool swipe_, 
             info.cancelled = true;
             return;
         }
+        if (expoCapture)
+            info.cancelled = true;
     });
     workspaceMoveHook = Event::bus()->m_events.window.moveToWorkspace.listen([this](PHLWINDOW window, PHLWORKSPACE workspace) { onWindowMoveToWorkspace(window, workspace); });
 
