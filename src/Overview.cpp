@@ -1030,6 +1030,15 @@ float ribbonScale() {
     const float scale = Hyprexpo::ConfigValues::getFloat("plugin:hyprexpo:ribbon_scale", HyprexpoConfig::RIBBON_SCALE_DEFAULT);
     return scale > 0.0F ? scale : HyprexpoConfig::RIBBON_SCALE_DEFAULT;
 }
+// Scroll sensitivity, read live so `hyprctl keyword` retunes without a
+// reload: discrete (mouse wheel/tilt) vs continuous (touchpad) multipliers.
+double scrollScale(bool discrete) {
+    if (discrete)
+        return std::clamp((double)Hyprexpo::ConfigValues::getFloat("plugin:hyprexpo:wheel_scroll_scale", HyprexpoConfig::WHEEL_SCROLL_SCALE_DEFAULT),
+                          0.5, 20.0);
+    return std::clamp((double)Hyprexpo::ConfigValues::getFloat("plugin:hyprexpo:touchpad_scroll_scale", HyprexpoConfig::TOUCHPAD_SCROLL_SCALE_DEFAULT),
+                      0.5, 20.0);
+}
 // Thin adapter: Vector2D in, pure strip out.
 Hyprexpo::Ribbon::SStrip ribbonStrip(const Vector2D& total, int cols, int count, double gap, double outer, double searchH, double rowH, double scrollX) {
     return Hyprexpo::Ribbon::layoutStrip(total.x, total.y, cols, count, gap, outer, searchH, rowH, scrollX, (double)ribbonScale());
@@ -1726,7 +1735,7 @@ COverview::COverview(PHLWORKSPACE startedOn_, PHLMONITOR monitor_, bool swipe_, 
                 // Fresh scroll input stops coasting (wheel takes over);
                 // touchpad bursts feed the release fling (no release event).
                 if (event.axis == WL_POINTER_AXIS_HORIZONTAL_SCROLL) {
-                    const double scaled = raw * (discrete ? 4.0 : 2.5);
+                    const double scaled = raw * scrollScale(discrete);
                     if (std::abs(scaled) < 2.0)
                         continue; // driver noise: kills no coast, feeds nothing, jitters nothing
                     OV->ribbonVel = 0.0; // fresh input takes over: inertia stops
@@ -1738,7 +1747,7 @@ COverview::COverview(PHLWORKSPACE startedOn_, PHLMONITOR monitor_, bool swipe_, 
                     OV->ribbonScrollBy(scaled);
                 } else if (discrete) {
                     OV->ribbonVel = 0.0;
-                    OV->ribbonScrollBy(raw * 4.0);
+                    OV->ribbonScrollBy(raw * scrollScale(true));
                 } else
                     continue;
                 info.cancelled = true;
@@ -1753,15 +1762,16 @@ COverview::COverview(PHLWORKSPACE startedOn_, PHLMONITOR monitor_, bool swipe_, 
             // takes the discrete open path (burst accumulator that fires at
             // half threshold — touchpad and mouse alike, each scaled); a
             // fitted sheet rides the analog detent (list scroll + close
-            // pull) as before. Mouse closing ticks get an extra boost so a
-            // few notches commit the close (downward mouse scrolls list a
-            // bit faster as accepted collateral; touchpad untouched).
+            // pull) as before. Mouse closing ticks get an extra boost (2x the
+            // wheel scale) so a few notches commit the close (downward mouse
+            // scrolls list a bit faster as accepted collateral; the touchpad
+            // scale is untouched).
             if (!OV->drawer.isFitted())
-                OV->drawer.wheelTouchOpen(raw * (discrete ? 4.0 : 2.5));
+                OV->drawer.wheelTouchOpen(raw * scrollScale(discrete));
             else if (discrete && raw > 0.0)
-                OV->drawer.wheel(raw * 8.0);
+                OV->drawer.wheel(raw * scrollScale(true) * 2.0);
             else
-                OV->drawer.wheel(raw * (discrete ? 4.0 : 2.5));
+                OV->drawer.wheel(raw * scrollScale(discrete));
             // The pointer didn't move, so the highlight would sit on the
             // wrong app after the content shifted: refresh it from the
             // cursor like a mouse move would.
