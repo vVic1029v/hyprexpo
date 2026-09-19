@@ -859,6 +859,21 @@ void CDrawerAddon::renderPass() {
         return b;
     };
 
+    // Sheet plate: one rect exactly matching the live sheet (search strip
+    // top edge to screen bottom), so the drawer reads as a solid surface
+    // rising/sinking with the pull instead of icons floating over whatever
+    // is behind. searchTop() already rides anim + pullVisual, so the plate
+    // tracks every path (finger, wheel, dispatcher) for free. Same
+    // near-black as the search well; square corners (the sheet is
+    // edge-to-edge; rounding would leave slivers at the screen edges).
+    {
+        const double H = MON->m_size.y;
+        if (sTop < H) {
+            CBox plate = toPhys(CBox{{0.0, sTop}, {W, H - sTop}});
+            Render::GL::g_pHyprOpenGL->renderRect(plate, CHyprColor{0xff0a0a0a}, {});
+        }
+    }
+
     // search strip: well + text + focus ring
     {
         CBox well = toPhys(CBox{{48.0, sTop}, {W - 96.0, sH}});
