@@ -127,12 +127,13 @@ double CDrawerAddon::searchH() const {
 double CDrawerAddon::searchTop() const {
     // Docked: strip sits just above the single bottom row. Fitted: top.
     // The search strip is part of the sheet: it rides pullVisual exactly
-    // like the app grid below it.
+    // like the app grid below it, plus the select-close dive (whole sheet
+    // drops below the screen edge while the overview zooms into the tile).
     const auto MON = m_owner->pMonitor.lock();
     const double H = MON ? MON->m_size.y : 0.0;
     const double dockedY = H - 16.0 - rowH() - 12.0 - searchH();
     const double fittedY = 24.0;
-    return dockedY + (fittedY - dockedY) * smooth01(state.anim) + state.pullVisual;
+    return dockedY + (fittedY - dockedY) * smooth01(state.anim) + state.pullVisual + state.divePx;
 }
 
 // Docked/fitted sheet endpoints (monitor-local). Single source for the
@@ -148,10 +149,24 @@ double CDrawerAddon::top() const {
     // Docked: one pinned row pinned to the bottom edge (rest of the grid
     // lives below the screen and scrolls up into view when fitted).
     // pullVisual shifts the sheet with the finger while a pull drag is
-    // in flight (or springing back); otherwise it is zero.
+    // in flight (or springing back); otherwise it is zero. divePx drops
+    // the whole sheet past the screen edge on select-close.
     double dockedY, fittedY;
     sheetEnds(dockedY, fittedY);
-    return dockedY + (fittedY - dockedY) * smooth01(state.anim) + state.pullVisual;
+    return dockedY + (fittedY - dockedY) * smooth01(state.anim) + state.pullVisual + state.divePx;
+}
+
+void CDrawerAddon::startDive() {
+    const auto MON = m_owner->pMonitor.lock();
+    if (!MON)
+        return;
+    // Drop distance: current sheet top to fully below the screen edge.
+    // Runs at ~2x the open-animation rate: smooth, but gone before the
+    // zoom lands. Idempotent: a second call mid-dive just re-arms.
+    state.diveTarget = MON->m_size.y - searchTop() + 64.0;
+    if (state.diveTarget < 0.0)
+        state.diveTarget = 0.0;
+    m_owner->damage();
 }
 
 // Full travel of the sheet between docked and fitted (always >= 0).
@@ -816,7 +831,15 @@ void CDrawerAddon::stepFrame() {
         if (std::abs(state.anim - target) < 0.002f)
             state.anim = target;
     }
-    if (state.anim == target && state.pullVisual == 0.0 && state.flingVel == 0.0)
+    // Select-close dive: whole sheet below the screen edge, ~2x the open
+    // rate so it clears before the zoom lands. Smooth exponential, snapped
+    // at the end like everything else here.
+    if (state.divePx < state.diveTarget) {
+        state.divePx += (state.diveTarget - state.divePx) * std::min(1.0, dt * 14.0);
+        if (state.diveTarget - state.divePx < 0.5)
+            state.divePx = state.diveTarget;
+    }
+    if (state.anim == target && state.pullVisual == 0.0 && state.flingVel == 0.0 && state.divePx >= state.diveTarget)
         return;
     // List inertia: integrates only with no live input and no displaced
     // sheet; anything else (grab, pull, snap, state flip) owns the motion.

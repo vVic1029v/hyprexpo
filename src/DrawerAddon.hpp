@@ -45,6 +45,7 @@ class CDrawerAddon final : public Hyprexpo::Addon::IOverviewAddon {
     // the threshold. Separate from the analog wheel()/touch drag paths.
     void wheelTouchOpen(double fingerDy);
     bool isFitted() const { return state.fitted; }
+    void startDive(); // select-close: drop the whole sheet below the screen edge, fast
     void updateHover(const Vector2D& local) override;
 
     void touchDown(const Vector2D& local) override;
@@ -73,6 +74,8 @@ class CDrawerAddon final : public Hyprexpo::Addon::IOverviewAddon {
         double      pullVisual   = 0.0;   // live sheet offset px, follows the push
         double      wheelAcc     = 0.0;   // touchpad-open burst accumulation px
         double      wheelAccS    = 0.0;   // last touchpad-open burst event timestamp
+        double      divePx       = 0.0;   // select-close sheet drop px (0 at rest)
+        double      diveTarget   = 0.0;   // drop distance: sheet top to below the screen edge
         bool        pulling      = false; // a pull drag is in flight
         bool        pullEngaged  = false; // latched at press: may commit open/close
         int         hoverApp     = -1;    // filtered-list position under pointer
