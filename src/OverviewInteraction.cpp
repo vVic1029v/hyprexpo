@@ -381,6 +381,8 @@ void COverview::touchPressDown(int32_t touchID, const Vector2D& global, const PH
     if (closing || !monitor)
         return;
     cancelTouchPress();
+    ribbonVel = 0.0; // a new press takes over: strip inertia stops
+    ribbonTrack.reset();
     touchPress.active      = true;
     touchPress.touchID     = touchID;
     touchPress.downGlobal  = global;
@@ -526,8 +528,17 @@ void COverview::touchPressUp(int32_t touchID) {
         OWNER->drawer.focusSearch();
         return;
     }
-    if (wasPanning)
-        return; // ribbon pan: release commits nothing, never selects
+    if (wasPanning) {
+        // Ribbon flick: release slope through the shared fling physics —
+        // same threshold, clamp, drain, and end-stop as the drawer list.
+        // Scroll-space moves against the finger, exactly like ribbonPanBy
+        // in reverse: fingers fling right, the strip coasts right.
+        const double now = std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
+        OWNER->ribbonVel = Hyprexpo::Fling::startVelocity(OWNER->ribbonTrack.slope(now));
+        if (OWNER->ribbonVel != 0.0)
+            OWNER->damage();
+        return; // release commits nothing else, never selects
+    }
     if (wasDragging) {
         // drop: move the window (or no-op) and never fall through to select
         if (auto* const SOURCE = gridOverviewForMonitorKey(g_overviewDrag.state.sourceMonitorKey))

@@ -1080,7 +1080,28 @@ void COverview::ribbonScrollBy(double deltaPx) {
 
 void COverview::ribbonPanBy(double fingerDx) {
     // Touch: content follows the finger (drag right -> strip moves right).
+    // Samples feed the release fling (shared drawer physics).
+    ribbonTrack.push(std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count(), fingerDx);
     ribbonScrollBy(-fingerDx);
+}
+
+void COverview::stepRibbon() {
+    const double now = std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
+    const double dt  = ribbonLastStepS <= 0.0 ? 0.016 : std::min(0.1, now - ribbonLastStepS);
+    ribbonLastStepS  = now;
+    if (ribbonVel == 0.0)
+        return;
+    if (closing || drawer.hidesRibbon()) {
+        ribbonVel = 0.0; // tearing down or covered: no motion to show
+        return;
+    }
+    const double max = ribbonMaxScroll();
+    ribbonScrollX    = max <= 0.0 ? 0.0 : std::clamp(ribbonScrollX + ribbonVel * dt, 0.0, max);
+    if (ribbonScrollX <= 0.0 || ribbonScrollX >= max)
+        ribbonVel = 0.0; // hit an end: stop dead, no bounce
+    else
+        ribbonVel = Hyprexpo::Fling::drain(ribbonVel, dt);
+    damage();
 }
 
 // Open-time: center the active workspace's tile in the strip. Runs in the
@@ -1377,6 +1398,8 @@ COverview::COverview(PHLWORKSPACE startedOn_, PHLMONITOR monitor_, bool swipe_, 
                 continue; // on the keyboard layer: hands off entirely
             if (OV->drawer.pointerDragActive())
                 OV->drawer.pointerMove(dd);
+            if (OV->ribbonMousePan)
+                OV->ribbonScrollBy(-dd.x); // content follows the cursor, like a touch drag
             OV->updateHoveredFromMouse();
         }
 
@@ -1450,8 +1473,27 @@ COverview::COverview(PHLWORKSPACE startedOn_, PHLMONITOR monitor_, bool swipe_, 
         }
 
         if (event.state == WL_POINTER_BUTTON_STATE_PRESSED) {
+            // Right-drag on the ribbon pans the strip touch-style: scroll
+            // only, never grabs windows, never selects. The press is already
+            // cancelled above; the matching release is consumed below.
+            if (TARGET && event.button == 0x111) {
+                if (const auto TMON = TARGET->monitor()) {
+                    if (TARGET->regionAtPoint(GLOBAL - TMON->m_position) == COverview::ERegion::Ribbon) {
+                        TARGET->ribbonMousePan = true;
+                        return;
+                    }
+                }
+            }
             if (**PDRAGDROPENABLE && TARGET)
                 TARGET->beginWindowDrag();
+            return;
+        }
+
+        // A right-drag release that panned the ribbon ends here: consumed,
+        // never falls through to workspace select (press may have started
+        // off-ribbon after a re-grab, so the flag — not the region — decides).
+        if (TARGET && TARGET->ribbonMousePan) {
+            TARGET->ribbonMousePan = false;
             return;
         }
 
@@ -1585,11 +1627,17 @@ COverview::COverview(PHLWORKSPACE startedOn_, PHLMONITOR monitor_, bool swipe_, 
                             // machine runs natural_scroll on; revisit if that
                             // ever changes.) Horizontal is already correct.
             if (region == COverview::ERegion::Ribbon) {
-                // Horizontal (touchpad two-finger / tilt wheel) pans the
-                // workspace strip; vertical falls through to capture.
-                if (event.axis != WL_POINTER_AXIS_HORIZONTAL_SCROLL)
+                // The strip pans horizontally: touchpad two-finger / tilt
+                // wheel as before, plus the mouse wheel (vertical ticks pan
+                // the strip too: down goes toward higher workspaces, mirroring
+                // SUPER+Right). Touchpad vertical stays untouched (diagonal
+                // scrolls must not yank the strip); it falls to capture.
+                if (event.axis == WL_POINTER_AXIS_HORIZONTAL_SCROLL)
+                    OV->ribbonScrollBy(raw * (discrete ? 4.0 : 2.5));
+                else if (discrete)
+                    OV->ribbonScrollBy(raw * 4.0);
+                else
                     continue;
-                OV->ribbonScrollBy(raw * (discrete ? 4.0 : 2.5));
                 info.cancelled = true;
                 return;
             }
@@ -1602,9 +1650,13 @@ COverview::COverview(PHLWORKSPACE startedOn_, PHLMONITOR monitor_, bool swipe_, 
             // takes the discrete open path (burst accumulator that fires at
             // half threshold — touchpad and mouse alike, each scaled); a
             // fitted sheet rides the analog detent (list scroll + close
-            // pull) as before.
+            // pull) as before. Mouse closing ticks get an extra boost so a
+            // few notches commit the close (downward mouse scrolls list a
+            // bit faster as accepted collateral; touchpad untouched).
             if (!OV->drawer.isFitted())
                 OV->drawer.wheelTouchOpen(raw * (discrete ? 4.0 : 2.5));
+            else if (discrete && raw > 0.0)
+                OV->drawer.wheel(raw * 8.0);
             else
                 OV->drawer.wheel(raw * (discrete ? 4.0 : 2.5));
             // The pointer didn't move, so the highlight would sit on the
