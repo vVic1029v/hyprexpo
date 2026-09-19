@@ -154,6 +154,12 @@ void COverview::close(bool switchToSelection) {
 
     closing = true;
 
+    // Selecting a workspace dives the whole drawer below the screen edge
+    // (smooth, ~2x open speed) so the zoom into the tile plays over the
+    // workspace, not behind the sheet. Cancelling keeps the sheet as-is.
+    if (switchToSelection)
+        drawer.startDive();
+
     redrawAll();
 
     if (switchToSelection && (TILE.workspaceID != WORKSPACE_INVALID || emptyTilesSelectable) &&
