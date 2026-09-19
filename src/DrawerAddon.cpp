@@ -387,6 +387,10 @@ void CDrawerAddon::wheelTouchOpen(double fingerDy) {
 }
 
 void CDrawerAddon::wheel(double fingerDy) {
+    wheel(fingerDy, false);
+}
+
+void CDrawerAddon::wheel(double fingerDy, bool discrete) {
     // Fitted-sheet only: docked sheets take wheelTouchOpen (the hook routes
     // by fitted state), so there is no docked branch here by design.
     if (m_owner->closeCommitted() || !state.fitted)
@@ -418,7 +422,17 @@ void CDrawerAddon::wheel(double fingerDy) {
         return;
     }
     const double before = state.scroll;
-    const double over   = listScroll(fingerDy);
+    // Mouse wheels speak standard scroll direction (down = into the list);
+    // touch and touchpad share finger down-positive with touch drags. A
+    // down-push that overshoots the very top keeps the list pinned so the
+    // push accumulates into the dismiss pull instead of scrolling away.
+    const double moveDy = discrete ? -fingerDy : fingerDy;
+    double       over   = 0.0;
+    if (fingerDy > 0.0)
+        over = std::max(0.0, fingerDy - before);
+    const bool closingPush = discrete && over > 0.0 && before <= rowH();
+    if (!closingPush)
+        state.scroll = std::clamp(before - moveDy, 0.0, maxScroll());
     // Engagement is scroll position, never screen position: only a push
     // that starts within the top row may close. Deeper pushes just scroll.
     if (fingerDy > 0.0 && over > 0.0 && before <= rowH())
@@ -522,7 +536,11 @@ void CDrawerAddon::dragAdvance(double fingerDy) {
 }
 
 // Release: pulled far enough -> animate to the new state; otherwise the
-// sheet springs back (stepFrame decays pullVisual to zero).
+// sheet springs back (stepFrame decays pullVisual to zero). Distance AND
+// velocity decide: a fast flick commits on a short pull (its projected
+// travel over COMMIT_PROJECTION_S counts), a slow drag needs the full
+// distance. Close additionally requires the top-of-list latch (first
+// criterion); amount+velocity is the second.
 void CDrawerAddon::endDrag(bool commit) {
     if (!state.pulling)
         return;
@@ -530,11 +548,12 @@ void CDrawerAddon::endDrag(bool commit) {
     const double threshold = pullThreshold();
     const double span      = pullSpan();
     if (commit && state.pullEngaged && span > 0.0) {
-        if (!state.fitted && -state.pullVisual >= threshold) {
+        const double flick = releaseVelocity(pullStamp());
+        if (!state.fitted && -state.pullVisual + std::max(0.0, -flick) * Hyprexpo::Fling::COMMIT_PROJECTION_S >= threshold) {
             commitPull(true, span);
             return;
         }
-        if (state.fitted && state.pullVisual >= threshold) {
+        if (state.fitted && state.pullVisual + std::max(0.0, flick) * Hyprexpo::Fling::COMMIT_PROJECTION_S >= threshold) {
             commitPull(false, span);
             return;
         }

@@ -270,6 +270,7 @@ inline constexpr double MAX_PX_S  = 9000.0; // release-spike clamp
 inline constexpr double FRICTION  = 5.0; // exponential drain per second
 inline constexpr double STOP_PX_S = 80.0; // below: stop dead
 inline constexpr double WINDOW_S  = 0.1; // trailing slope window
+inline constexpr double COMMIT_PROJECTION_S = 0.25; // pull commit: projected travel horizon
 inline constexpr int    SAMPLES   = 8; // ring size per tracker
 
 // Cumulative finger travel + trailing ring. Push once per motion event,
