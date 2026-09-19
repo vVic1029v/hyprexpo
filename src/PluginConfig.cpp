@@ -108,6 +108,10 @@ void registerHyprexpoConfigValues() {
     addConfigValue(makeShared<Config::Values::CIntValue>("plugin:hyprexpo:tile_rounding", "tile rounding", HyprexpoConfig::TILE_ROUNDING_DEFAULT));
     addConfigValue(makeShared<Config::Values::CFloatValue>("plugin:hyprexpo:tile_rounding_power", "tile rounding power", HyprexpoConfig::TILE_ROUNDING_POWER_DEFAULT));
     addConfigValue(makeShared<Config::Values::CFloatValue>("plugin:hyprexpo:ribbon_scale", "workspace ribbon tile scale", HyprexpoConfig::RIBBON_SCALE_DEFAULT));
+    addConfigValue(makeShared<Config::Values::CFloatValue>("plugin:hyprexpo:wheel_scroll_scale", "mouse wheel scroll multiplier in the expose",
+                                                           HyprexpoConfig::WHEEL_SCROLL_SCALE_DEFAULT));
+    addConfigValue(makeShared<Config::Values::CFloatValue>("plugin:hyprexpo:touchpad_scroll_scale", "touchpad scroll multiplier in the expose",
+                                                           HyprexpoConfig::TOUCHPAD_SCROLL_SCALE_DEFAULT));
     addConfigValue(makeShared<Config::Values::CIntValue>("plugin:hyprexpo:tile_rounding_focus", "focus tile rounding", HyprexpoConfig::TILE_ROUNDING_FOCUS_DEFAULT));
     addConfigValue(makeShared<Config::Values::CIntValue>("plugin:hyprexpo:tile_rounding_current", "current tile rounding", HyprexpoConfig::TILE_ROUNDING_CURRENT_DEFAULT));
     addConfigValue(makeShared<Config::Values::CIntValue>("plugin:hyprexpo:tile_rounding_hover", "hover tile rounding", HyprexpoConfig::TILE_ROUNDING_HOVER_DEFAULT));

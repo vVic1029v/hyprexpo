@@ -111,4 +111,6 @@ inline constexpr int         DRAWER_EXPAND_PX_DEFAULT        = 60;
 inline constexpr int         DRAWER_ICON_PX_DEFAULT          = 72;
 inline constexpr float       RIBBON_SCALE_DEFAULT            = 1.5F;
 inline constexpr float       DRAWER_RESIST_DEFAULT           = 0.25F;
+inline constexpr float       WHEEL_SCROLL_SCALE_DEFAULT      = 6.0F;
+inline constexpr float       TOUCHPAD_SCROLL_SCALE_DEFAULT   = 2.5F;
 }
