@@ -268,26 +268,6 @@ struct SSample {
 // degenerate (still finger, single sample, zero span).
 double releaseSlope(const std::vector<SSample>& ordered, double now, double windowS);
 
-// Extreme per-event velocity inside the trailing window anchored at the
-// last sample (same sign convention as the samples); 0 when undersampled.
-// For devices with no release event (touchpads): the trailing slope would
-// only see the lift tail, but the burst's peak is what the fingers meant.
-inline double peakVelocity(const std::vector<SSample>& ordered, double windowS) {
-    if (ordered.size() < 2)
-        return 0.0;
-    const double lastT = ordered.back().t;
-    double       best  = 0.0;
-    for (size_t k = 1; k < ordered.size(); ++k) {
-        const double dt = ordered[k].t - ordered[k - 1].t;
-        if (dt < 0.001 || ordered[k].t < lastT - windowS)
-            continue; // same-ms pair (spike) or outside the window
-        const double inst = (ordered[k].y - ordered[k - 1].y) / dt;
-        if (std::abs(inst) >= std::abs(best))
-            best = inst; // latest extreme wins: sustained braking overwrites
-    }
-    return best;
-}
-
 // Shared inertia constants: every flinger (drawer list, ribbon strip)
 // starts, clamps, and drains velocity with these, so all surfaces feel
 // identical. Values are the drawer-proven ones.
@@ -330,10 +310,6 @@ struct STracker {
 
     double slope(double now) const {
         return releaseSlope(ordered(), now, WINDOW_S);
-    }
-
-    double peak(double windowS) const {
-        return peakVelocity(ordered(), windowS);
     }
 };
 

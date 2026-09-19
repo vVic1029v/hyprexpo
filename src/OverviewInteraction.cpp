@@ -766,6 +766,20 @@ bool COverview::moveFocus(int dx, int dy) {
     static auto* const* PWRAPV = (Hyprlang::INT* const*)HyprlandAPI::getConfigValue(PHANDLE, "plugin:hyprexpo:keynav_wrap_v")->getDataStaticPtr();
 
     if (dx != 0) {
+        // Trailing "+" tile: always a valid horizontal neighbor past the
+        // end (and back), regardless of grid shape — it lives past the
+        // range the shape was computed for.
+        if (!images.empty() && images.back().isNewWorkspace) {
+            const int plus = (int)images.size() - 1;
+            if (dx > 0 && kbFocusID == plus - 1 && isTileValid(plus)) {
+                kbFocusID = plus;
+                return true;
+            }
+            if (dx < 0 && kbFocusID == plus && plus - 1 >= 0 && isTileValid(plus - 1)) {
+                kbFocusID = plus - 1;
+                return true;
+            }
+        }
         static auto* const* PREADING = (Hyprlang::INT* const*)HyprlandAPI::getConfigValue(PHANDLE, "plugin:hyprexpo:keynav_reading_order")->getDataStaticPtr();
         int                 step     = dx > 0 ? 1 : -1;
         if (**PREADING) {
