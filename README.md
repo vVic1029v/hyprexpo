@@ -188,7 +188,9 @@ make dev-build
   overview and swipe down closes it (touchscreen and touchpad alike); both
   are idempotent — up never closes, down never opens. A second swipe up
   with the overview open fits the app drawer (stateless expand-then-open
-  pair, so taps closing the overview can never desync it).
+  pair, so taps closing the overview can never desync it). Swipe down
+  collapses the drawer first, then closes, so a fitted sheet never hides
+  the workspace-fill animation.
 - **Pullable app drawer.** Search strip plus app grid live on one sheet
   that follows the finger. A pull only commits past a quarter of the screen
   height, otherwise it springs back — opening and closing, mouse, touch,
