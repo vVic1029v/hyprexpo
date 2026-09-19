@@ -879,18 +879,19 @@ void CDrawerAddon::renderPass() {
     const double tw = tileW();
     const double rh = rowH();
     const int iconPx = drawerCfgIconPx();
-    // Tiles fade out over their own height as they slide under the search
-    // bar instead of popping whole: alpha tracks how much of the tile is
-    // still below the bar's bottom edge — fully visible clear of it, gone
-    // exactly when fully behind it.
+    // Tiles fade out over nearly their own height as they slide under the
+    // search bar instead of popping whole: alpha tracks how much of the
+    // tile is still below the bar's bottom edge — fully visible until the
+    // top is half an icon past it, gone exactly when fully behind it.
     const double barBottom = sTop + sH;
+    const double fadeSpan = std::max(1.0, rh - (double)iconPx / 2.0);
     for (size_t oi = 0; oi < state.order.size(); ++oi) {
         if (state.order[oi] == Hyprexpo::Drawer::EMPTY_SLOT)
             continue; // recent-row padding hole: no tile, no hit test
         CBox tile = tileBox((int)oi);
         if (tile.y + tile.h < top() || tile.y > top() + clipH())
             continue;
-        const double vis = tile.h > 0.0 ? smooth01(std::clamp((tile.y + tile.h - barBottom) / tile.h, 0.0, 1.0)) : 1.0;
+        const double vis = tile.h > 0.0 ? smooth01(std::clamp((tile.y + tile.h - barBottom) / fadeSpan, 0.0, 1.0)) : 1.0;
         if (vis <= 0.0)
             continue; // fully behind the search bar: despawned, not drawn
         const float alpha = (float)vis;
