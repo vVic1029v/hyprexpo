@@ -1070,6 +1070,7 @@ double COverview::ribbonMaxScroll() const {
 void COverview::ribbonScrollBy(double deltaPx) {
     if (closing)
         return;
+    ribbonTargetX = -1.0; // direct input takes over from any animation
     const double max  = ribbonMaxScroll();
     const double next = max <= 0.0 ? 0.0 : std::clamp(ribbonScrollX + deltaPx, 0.0, max);
     if (next != ribbonScrollX) {
@@ -1090,15 +1091,36 @@ void COverview::stepRibbon() {
     const double now = std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
     const double dt  = ribbonLastStepS <= 0.0 ? 0.016 : std::min(0.1, now - ribbonLastStepS);
     ribbonLastStepS  = now;
+    // Animated scroll goal (arrow centering, open centering): ease toward
+    // it, snap on arrival. Direct pans and flings clear the goal first, so
+    // the newest input always owns the motion.
+    if (ribbonTargetX >= 0.0) {
+        if (closing) {
+            ribbonTargetX = -1.0;
+            return;
+        }
+        ribbonVel         = 0.0;
+        const double max  = ribbonMaxScroll();
+        const double goal = std::clamp(ribbonTargetX, 0.0, max);
+        ribbonScrollX += (goal - ribbonScrollX) * std::min(1.0, dt * 12.0);
+        if (std::abs(goal - ribbonScrollX) < 0.5) {
+            ribbonScrollX = goal;
+            ribbonTargetX = -1.0;
+        } else {
+            damage();
+        }
+        return;
+    }
     if (ribbonVel == 0.0) {
-        // Touchpads have no release event: a fast burst that just went
-        // quiet coasts on its PEAK velocity (the trailing slope would only
-        // see the lift tail). Same shared threshold/clamp below. Slow
-        // trailing bursts stay under threshold: no fling.
+        // Touchpads have no release event: a burst that just went quiet is
+        // treated as released very soon after scrolling — the TRAILING
+        // slope over a short window decides, so holding still (slow tail)
+        // never flings and only a fast lift-off does. Same shared
+        // threshold/clamp below; the speed bar itself stays small.
         // Frames are sustained until the eval window lapses — without this
         // the pump dies with the burst and the idle eval never runs.
-        if (!closing && !drawer.hidesRibbon() && wheelS > 0.0 && now - wheelS > 0.08 && now - wheelS < 0.5) {
-            ribbonVel = Hyprexpo::Fling::startVelocityDirect(wheelTrack.peak(0.3));
+        if (!closing && !drawer.hidesRibbon() && wheelS > 0.0 && now - wheelS > 0.05 && now - wheelS < 0.5) {
+            ribbonVel = Hyprexpo::Fling::startVelocityDirect(wheelTrack.slope(now));
             wheelS    = 0.0;
             wheelTrack.reset();
             if (ribbonVel != 0.0)
@@ -1138,7 +1160,11 @@ void COverview::ribbonScrollToWorkspace(int wsid) {
         return;
     const auto   strip  = ribbonStrip(MON->m_size, cols, count, (double)GAP_WIDTH, outer, drawer.searchH(), drawer.rowH(), 0.0);
     const double center = strip.x0 + (double)id * (strip.tileW + Hyprexpo::Ribbon::GAP_MULTIPLIER * (double)GAP_WIDTH) + strip.tileW / 2.0;
-    ribbonScrollX       = strip.maxScroll <= 0.0 ? 0.0 : std::clamp(center - MON->m_size.x / 2.0, 0.0, strip.maxScroll);
+    // Animated: stepRibbon eases toward the goal (same rate family as the
+    // sheet snap); direct pans/flings clear the goal and take over.
+    ribbonVel     = 0.0;
+    ribbonTargetX = strip.maxScroll <= 0.0 ? 0.0 : std::clamp(center - MON->m_size.x / 2.0, 0.0, strip.maxScroll);
+    damage();
 }
 
 double COverview::ribbonH() const {
