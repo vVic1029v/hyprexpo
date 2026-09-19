@@ -1094,12 +1094,16 @@ void COverview::stepRibbon() {
         // Touchpads have no release event: a fast trailing burst that just
         // went quiet coasts like a touch flick (same shared physics). Slow
         // trailing slopes stay below the start threshold: no fling.
+        // Frames are sustained until the eval window lapses — without this
+        // the pump dies with the burst and the idle eval never runs.
         if (!closing && !drawer.hidesRibbon() && wheelS > 0.0 && now - wheelS > 0.08 && now - wheelS < 0.5) {
             ribbonVel = Hyprexpo::Fling::startVelocityDirect(wheelTrack.slope(now));
             wheelS    = 0.0;
             wheelTrack.reset();
             if (ribbonVel != 0.0)
                 damage();
+        } else if (wheelS > 0.0 && now - wheelS < 0.5) {
+            damage();
         }
         return;
     }
@@ -1390,6 +1394,7 @@ COverview::COverview(PHLWORKSPACE startedOn_, PHLMONITOR monitor_, bool swipe_, 
     kbFocusID = openedID;
 
     drawer.onOpen();
+    drawer.focusSearch(); // typing goes straight to the drawer search box
 
     auto onCursorMove = [this](Event::SCallbackInfo& info) {
         if (closing)

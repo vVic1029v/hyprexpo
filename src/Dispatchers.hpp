@@ -15,3 +15,5 @@ void                             disableExpoGestureRegistration();
 bool                             isRenderingOverview();
 bool                             shouldCancelOverview(const IKeyboard::SKeyEvent& event);
 bool                             shouldSelectWorkspaceFromKey(const IKeyboard::SKeyEvent& event);
+bool                             handleOverviewNavKey(const IKeyboard::SKeyEvent& event);
+bool                             swallowOverviewKey(const IKeyboard::SKeyEvent& event);
