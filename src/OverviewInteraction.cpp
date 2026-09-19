@@ -2,6 +2,8 @@
 #define HyprlandAPI CompatHyprlandAPI
 #include "OverviewInternal.hpp"
 #include "HyprexpoLogic.hpp"
+#include "ConfigValues.hpp"
+#include "HyprexpoConfig.hpp"
 #include <hyprland/src/Compositor.hpp>
 #include <hyprland/src/config/ConfigValue.hpp>
 #include <hyprland/src/desktop/state/GlobalWindowController.hpp>
@@ -352,7 +354,8 @@ bool COverview::finishWindowDrag() {
 // a horizontal swipe pans, and only a *still* hold picks a window up.
 static constexpr uint32_t TOUCH_HOLD_MS   = 350;
 static constexpr double   TOUCH_DRAG_PX   = 12.0; // same threshold as mouse drag
-static constexpr double   HOLD_STILL_PX   = 8.0;  // hold must start still: drift voids pickup
+// Hold drift allowance lives in config (plugin:hyprexpo:touch_hold_slop_px):
+// hardcoded stillness voided pickups on any tremor.
 
 COverview* COverview::touchOwner(int32_t touchID) {
     for (const auto& session : g_overviews) {
@@ -404,11 +407,14 @@ void COverview::touchPressDown(int32_t touchID, const Vector2D& global, const PH
             if (!OV->touchPress.active || OV->touchPress.touchID != touchID || OV->touchPress.dragging || OV->touchPress.ribbonPanning ||
                 OV->closing)
                 return;
-            // A hold picks up only a still finger: drift means the press
-            // already became a pan/scroll, so picking up now would grab a
-            // window out from under a moving gesture at random.
-            const auto drift = OV->touchPress.lastGlobal - OV->touchPress.downGlobal;
-            if (std::hypot(drift.x, drift.y) >= HOLD_STILL_PX)
+            // A hold picks up only a mostly-still finger: drift means the
+            // press already became a pan/scroll, so picking up now would grab
+            // a window out from under a moving gesture at random. Allowance
+            // is plugin:hyprexpo:touch_hold_slop_px (px, default 20).
+            const auto   drift    = OV->touchPress.lastGlobal - OV->touchPress.downGlobal;
+            const double holdSlop = std::max(1.0, (double)Hyprexpo::ConfigValues::getInt("plugin:hyprexpo:touch_hold_slop_px",
+                                                                                        HyprexpoConfig::TOUCH_HOLD_SLOP_PX_DEFAULT));
+            if (std::hypot(drift.x, drift.y) >= holdSlop)
                 return;
             OV->engageTouchDrag();
         },
