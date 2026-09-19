@@ -44,6 +44,127 @@ int64_t COverview::focusedWorkspaceID() const {
     return images[kbFocusID].workspaceID;
 }
 
+// --- Lua input-primitive surface: each mirrors one step of the legacy C++
+// touch path, so Lua-driven behavior stays identical by construction. ---
+
+std::string COverview::regionNameAt(double gx, double gy) const {
+    const auto MON = pMonitor.lock();
+    if (!MON || closing)
+        return "none";
+    switch (regionAtPoint(Vector2D{gx, gy} - MON->m_position)) {
+        case ERegion::Ribbon: return "ribbon";
+        case ERegion::Search: return "search";
+        case ERegion::Grid:   return "grid";
+        default:              return "none";
+    }
+}
+
+void COverview::hoverAt(double gx, double gy) {
+    const auto MON = pMonitor.lock();
+    if (!MON || closing)
+        return;
+    lastMousePosLocal = Vector2D{gx, gy} - MON->m_position;
+    updateHoveredFromMouse();
+}
+
+bool COverview::tapSelectAt(double gx, double gy) {
+    if (closing)
+        return false;
+    const auto MON = pMonitor.lock();
+    if (!MON)
+        return false;
+    if (size->getPercent() < 0.05f) {
+        close(false);
+        return true;
+    }
+    lastMousePosLocal = Vector2D{gx, gy} - MON->m_position;
+    updateHoveredFromMouse();
+    if (selectHoveredWorkspace()) {
+        closeOverviewsSelecting(this);
+        return true;
+    }
+    return false;
+}
+
+bool COverview::dragBeginAt(double gx, double gy) {
+    if (closing)
+        return false;
+    beginWindowDragAt(Vector2D{gx, gy});
+    return g_overviewDrag.state.active;
+}
+
+void COverview::dragUpdateAt(const Vector2D& global) {
+    if (!closing)
+        updateWindowDragAt(global);
+}
+
+bool COverview::dragEndTouch() {
+    if (closing)
+        return false;
+    return finishWindowDrag();
+}
+
+void COverview::dragCancelTouch() {
+    if (closing)
+        return;
+    resetOverviewDrag(Hyprexpo::EOverviewDragEventType::Cancel);
+    damage();
+}
+
+void COverview::drawerDownAt(double gx, double gy) {
+    const auto MON = pMonitor.lock();
+    if (!MON || closing)
+        return;
+    drawer.touchDown(Vector2D{gx, gy} - MON->m_position);
+}
+
+void COverview::drawerMotionBy(double dy, double dist) {
+    if (!closing)
+        drawer.touchMotion(dy, dist);
+}
+
+void COverview::drawerUpAt(double gx, double gy, double ddx, double ddy) {
+    const auto MON = pMonitor.lock();
+    if (!MON || closing)
+        return;
+    drawer.touchUp(Vector2D{gx, gy} - MON->m_position, Vector2D{ddx, ddy});
+}
+
+void COverview::drawerCancelTouch() {
+    if (!closing)
+        drawer.touchCancel();
+}
+
+void COverview::ribbonReleaseTouch() {
+    // Touch-release fling from the shared tracker (fed by ribbon_pan):
+    // same threshold/clamp/drain as every other flinger.
+    if (closing)
+        return;
+    const double now = std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
+    ribbonVel        = Hyprexpo::Fling::startVelocityDirect(ribbonTrack.slope(now));
+    ribbonTargetX    = -1.0;
+    if (ribbonVel != 0.0)
+        damage();
+}
+
+void COverview::focusSearchBox() {
+    if (!closing)
+        drawer.focusSearch();
+}
+
+void COverview::focusAt(double gx, double gy) {
+    if (closing)
+        return;
+    const auto MON = pMonitor.lock();
+    if (!MON)
+        return;
+    const int under = tileIndexAtPoint(Vector2D{gx, gy} - MON->m_position, size->value(), GAP_WIDTH, currentOuterInset(), true);
+    if (under >= 0 && under != kbFocusID && isTileValid(under)) {
+        kbFocusID = under;
+        damage();
+    }
+}
+
 bool COverview::selectWorkspaceByID(int64_t workspaceID) {
     if (closing)
         return false;

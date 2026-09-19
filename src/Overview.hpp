@@ -65,6 +65,25 @@ class COverview final : public IOverviewSession {
     void          close(bool switchToSelection = true);
     bool          selectHoveredWorkspace();
 
+    // Lua input-primitive surface (Phase 2): stateless per-event actions
+    // the default Lua touch layer drives. Coordinates are global
+    // compositor px. Each mirrors exactly one step of the legacy C++
+    // touch path, so Lua behavior stays identical by construction.
+    std::string   regionNameAt(double gx, double gy) const;
+    void          hoverAt(double gx, double gy);
+    bool          tapSelectAt(double gx, double gy);
+    bool          dragBeginAt(double gx, double gy);
+    void          dragUpdateAt(const Vector2D& global);
+    bool          dragEndTouch();
+    void          dragCancelTouch();
+    void          drawerDownAt(double gx, double gy);
+    void          drawerMotionBy(double dy, double dist);
+    void          drawerUpAt(double gx, double gy, double ddx, double ddy);
+    void          drawerCancelTouch();
+    void          ribbonReleaseTouch();
+    void          focusSearchBox();
+    void          focusAt(double gx, double gy);
+
     // keyboard navigation interface
     bool          onKbMoveFocus(const std::string& dir);
     bool          onKbConfirm();

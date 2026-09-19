@@ -221,6 +221,11 @@ make dev-build
   `mousemove` (`x,y,dx,dy`), `mousebutton` (`button,pressed,x,y,t`),
   `mousewheel` (`axis,delta,discrete,source,x,y,t`), `key`
   (`keysym,keycode,pressed`). `hyprexpo.on(ev, nil)` unregisters.
+- **Lua touch primitives** (per-event actions the default touch layer
+  drives; global px): `region_at`, `hover_at`, `tap_select`, `ribbon_pan`,
+  `ribbon_release`, `drag_begin/update/end/cancel`, `drawer_down/motion/up/
+  cancel`, `focus_search`, `focus_at`. The reference default touch layer
+  lives in `lua/hyprexpo-touch-default.lua` (port of the C++ touch path).
 - **On-screen keyboard.** Taps landing on a known keyboard layer surface
   (`plugin:hyprexpo:osk_namespaces`, default filled with `wvkbd`, plus
   first-detect auto-learn) fall through to the client instead of being
