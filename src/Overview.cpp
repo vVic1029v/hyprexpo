@@ -1127,19 +1127,23 @@ void COverview::stepRibbon() {
     const double now = std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
     const double dt  = ribbonLastStepS <= 0.0 ? 0.016 : std::min(0.1, now - ribbonLastStepS);
     ribbonLastStepS  = now;
-    // Animated scroll goal (arrow centering, open centering): ease toward
-    // it, snap on arrival. Direct pans and flings clear the goal first, so
-    // the newest input always owns the motion.
+    // Animated scroll goal (arrow centering, open centering): position is a
+    // pure function of elapsed time, so it progresses correctly no matter
+    // how sparse the frames are. Direct pans and flings clear the goal
+    // first, so the newest input always owns the motion.
     if (ribbonTargetX >= 0.0) {
         if (closing) {
             ribbonTargetX = -1.0;
             return;
         }
-        ribbonVel         = 0.0;
-        const double max  = ribbonMaxScroll();
+        ribbonVel        = 0.0;
+        const double max = ribbonMaxScroll();
         const double goal = std::clamp(ribbonTargetX, 0.0, max);
-        ribbonScrollX += (goal - ribbonScrollX) * std::min(1.0, dt * 12.0);
-        if (std::abs(goal - ribbonScrollX) < 0.5) {
+        double       t    = ribbonTargetT0 < 0.0 ? 1.0 : (now - ribbonTargetT0) / 0.28;
+        t                = std::clamp(t, 0.0, 1.0);
+        const double eased = t * t * (3.0 - 2.0 * t);
+        ribbonScrollX     = ribbonTargetFromX + (goal - ribbonTargetFromX) * eased;
+        if (t >= 1.0) {
             ribbonScrollX = goal;
             ribbonTargetX = -1.0;
         } else {

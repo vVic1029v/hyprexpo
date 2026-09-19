@@ -211,6 +211,8 @@ class COverview final : public IOverviewSession {
     Vector2D                     lastMousePosLocal = Vector2D{};
     double                       ribbonScrollX = 0.0; // horizontal pan offset px
     double                       ribbonTargetX = -1.0; // animated scroll goal px (-1 = none; direct input wins)
+    double                       ribbonTargetFromX = 0.0; // scroll pos when the goal was set
+    double                       ribbonTargetT0 = -1.0; // steady-clock start of the goal glide
     double                       ribbonVel     = 0.0; // strip inertia, same physics as the drawer list
     double                       ribbonLastStepS = 0.0;
     Hyprexpo::Fling::STracker    ribbonTrack; // touch finger travel (finger-space) for release slope
