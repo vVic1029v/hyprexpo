@@ -1080,8 +1080,9 @@ void COverview::ribbonScrollBy(double deltaPx) {
 
 void COverview::ribbonPanBy(double fingerDx) {
     // Touch: content follows the finger (drag right -> strip moves right).
-    // Samples feed the release fling (shared drawer physics).
-    ribbonTrack.push(std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count(), fingerDx);
+    // Tracked in scroll-space (negated like the motion itself) so the
+    // release fling needs no sign flip — same convention as the wheel path.
+    ribbonTrack.push(std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count(), -fingerDx);
     ribbonScrollBy(-fingerDx);
 }
 
@@ -1089,8 +1090,19 @@ void COverview::stepRibbon() {
     const double now = std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
     const double dt  = ribbonLastStepS <= 0.0 ? 0.016 : std::min(0.1, now - ribbonLastStepS);
     ribbonLastStepS  = now;
-    if (ribbonVel == 0.0)
+    if (ribbonVel == 0.0) {
+        // Touchpads have no release event: a fast trailing burst that just
+        // went quiet coasts like a touch flick (same shared physics). Slow
+        // trailing slopes stay below the start threshold: no fling.
+        if (!closing && !drawer.hidesRibbon() && wheelS > 0.0 && now - wheelS > 0.08 && now - wheelS < 0.5) {
+            ribbonVel = Hyprexpo::Fling::startVelocityDirect(wheelTrack.slope(now));
+            wheelS    = 0.0;
+            wheelTrack.reset();
+            if (ribbonVel != 0.0)
+                damage();
+        }
         return;
+    }
     if (closing || drawer.hidesRibbon()) {
         ribbonVel = 0.0; // tearing down or covered: no motion to show
         return;
@@ -1398,8 +1410,13 @@ COverview::COverview(PHLWORKSPACE startedOn_, PHLMONITOR monitor_, bool swipe_, 
                 continue; // on the keyboard layer: hands off entirely
             if (OV->drawer.pointerDragActive())
                 OV->drawer.pointerMove(dd);
-            if (OV->ribbonMousePan)
-                OV->ribbonScrollBy(-dd.x); // content follows the cursor, like a touch drag
+            if (OV->ribbonMousePan) {
+                // Right-drag: content follows the cursor like a touch drag;
+                // samples feed the release fling (same shared physics).
+                const double nowMove = std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
+                OV->wheelTrack.push(nowMove, -dd.x);
+                OV->ribbonScrollBy(-dd.x);
+            }
             OV->updateHoveredFromMouse();
         }
 
@@ -1480,6 +1497,9 @@ COverview::COverview(PHLWORKSPACE startedOn_, PHLMONITOR monitor_, bool swipe_, 
                 if (const auto TMON = TARGET->monitor()) {
                     if (TARGET->regionAtPoint(GLOBAL - TMON->m_position) == COverview::ERegion::Ribbon) {
                         TARGET->ribbonMousePan = true;
+                        TARGET->ribbonVel      = 0.0; // grab stops coasting
+                        TARGET->wheelTrack.reset();
+                        TARGET->wheelS = 0.0;
                         return;
                     }
                 }
@@ -1492,8 +1512,15 @@ COverview::COverview(PHLWORKSPACE startedOn_, PHLMONITOR monitor_, bool swipe_, 
         // A right-drag release that panned the ribbon ends here: consumed,
         // never falls through to workspace select (press may have started
         // off-ribbon after a re-grab, so the flag — not the region — decides).
+        // The release coasts like a touch flick (same shared physics).
         if (TARGET && TARGET->ribbonMousePan) {
             TARGET->ribbonMousePan = false;
+            const double nowUp      = std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
+            TARGET->ribbonVel       = Hyprexpo::Fling::startVelocityDirect(TARGET->wheelTrack.slope(nowUp));
+            TARGET->wheelTrack.reset();
+            TARGET->wheelS = 0.0;
+            if (TARGET->ribbonVel != 0.0)
+                TARGET->damage();
             return;
         }
 
@@ -1632,11 +1659,20 @@ COverview::COverview(PHLWORKSPACE startedOn_, PHLMONITOR monitor_, bool swipe_, 
                 // the strip too: down goes toward higher workspaces, mirroring
                 // SUPER+Right). Touchpad vertical stays untouched (diagonal
                 // scrolls must not yank the strip); it falls to capture.
-                if (event.axis == WL_POINTER_AXIS_HORIZONTAL_SCROLL)
+                // Fresh scroll input stops coasting (wheel takes over);
+                // touchpad bursts feed the release fling (no release event).
+                if (event.axis == WL_POINTER_AXIS_HORIZONTAL_SCROLL) {
+                    OV->ribbonVel = 0.0;
+                    if (!discrete) {
+                        const double nowWheel = std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
+                        OV->wheelTrack.push(nowWheel, raw * 2.5);
+                        OV->wheelS = nowWheel;
+                    }
                     OV->ribbonScrollBy(raw * (discrete ? 4.0 : 2.5));
-                else if (discrete)
+                } else if (discrete) {
+                    OV->ribbonVel = 0.0;
                     OV->ribbonScrollBy(raw * 4.0);
-                else
+                } else
                     continue;
                 info.cancelled = true;
                 return;
