@@ -874,28 +874,6 @@ void CDrawerAddon::renderPass() {
         }
     }
 
-    // search strip: well + text + focus ring
-    {
-        CBox well = toPhys(CBox{{48.0, sTop}, {W - 96.0, sH}});
-        Render::GL::g_pHyprOpenGL->renderRect(well, CHyprColor{0xff0a0a0a}, {.round = 10});
-        if (state.searchFocused) {
-            CBox ring = toPhys(CBox{{46.0, sTop - 2.0}, {W - 92.0, sH + 4.0}});
-            Render::GL::g_pHyprOpenGL->renderRect(ring, CHyprColor{0xff2ac3de}, {});
-            Render::GL::g_pHyprOpenGL->renderRect(well, CHyprColor{0xff0a0a0a}, {.round = 10});
-        }
-        if (state.queryDirty || !state.searchTex) {
-            const std::string text = state.query.empty() ? "Search apps…" : state.query;
-            const CHyprColor col = state.query.empty() ? CHyprColor{0xff787c99} : CHyprColor{0xffa9b1d6};
-            const int bw = std::max(16, (int)((W - 96.0 - 32.0) * sc));
-            state.searchTex = renderNumberTexture(text, col, Vector2D{(double)bw, sH * sc}, 1.0, (int)(17.0 * sc));
-            state.queryDirty = false;
-        }
-        if (state.searchTex) {
-            CBox tbox = toPhys(CBox{{48.0 + 16.0, sTop}, {W - 96.0 - 32.0, sH}});
-            Render::GL::g_pHyprOpenGL->renderTextureInternal(state.searchTex, tbox, {.damage = &damage, .a = 1.0f});
-        }
-    }
-
     // app grid, clipped to the visible band
     const int ncols = columns();
     const double tw = tileW();
@@ -932,6 +910,43 @@ void CDrawerAddon::renderPass() {
         if (label) {
             CBox lbox = toPhys(CBox{{tile.x, tile.y + 8.0 + (double)iconPx + 4.0}, {tile.w, 30.0}});
             Render::GL::g_pHyprOpenGL->renderTextureInternal(label, lbox, {.damage = &damage, .a = alpha});
+        }
+    }
+
+    // Search occluder: full-width plate-color backdrop from the search bar's
+    // bottom edge upward, drawn over the grid but under the well, so sliding
+    // tiles are hard-cut the moment they pass behind the bar instead of
+    // ghosting over it. Height grows with the open animation (zero docked,
+    // so no dark slab hangs over the ribbon) and always covers a full tile
+    // row, so nothing can peek out above it. Same color as the sheet plate:
+    // the seam is invisible.
+    {
+        const double ext = (rowH() + 16.0) * smooth01(state.anim);
+        if (ext > 0.0) {
+            CBox shade = toPhys(CBox{{0.0, sTop + sH - ext}, {W, ext}});
+            Render::GL::g_pHyprOpenGL->renderRect(shade, CHyprColor{0xff0a0a0a}, {});
+        }
+    }
+
+    // search strip: well + text + focus ring, crisp above the occluder
+    {
+        CBox well = toPhys(CBox{{48.0, sTop}, {W - 96.0, sH}});
+        Render::GL::g_pHyprOpenGL->renderRect(well, CHyprColor{0xff0a0a0a}, {.round = 10});
+        if (state.searchFocused) {
+            CBox ring = toPhys(CBox{{46.0, sTop - 2.0}, {W - 92.0, sH + 4.0}});
+            Render::GL::g_pHyprOpenGL->renderRect(ring, CHyprColor{0xff2ac3de}, {});
+            Render::GL::g_pHyprOpenGL->renderRect(well, CHyprColor{0xff0a0a0a}, {.round = 10});
+        }
+        if (state.queryDirty || !state.searchTex) {
+            const std::string text = state.query.empty() ? "Search apps…" : state.query;
+            const CHyprColor col = state.query.empty() ? CHyprColor{0xff787c99} : CHyprColor{0xffa9b1d6};
+            const int bw = std::max(16, (int)((W - 96.0 - 32.0) * sc));
+            state.searchTex = renderNumberTexture(text, col, Vector2D{(double)bw, sH * sc}, 1.0, (int)(17.0 * sc));
+            state.queryDirty = false;
+        }
+        if (state.searchTex) {
+            CBox tbox = toPhys(CBox{{48.0 + 16.0, sTop}, {W - 96.0 - 32.0, sH}});
+            Render::GL::g_pHyprOpenGL->renderTextureInternal(state.searchTex, tbox, {.damage = &damage, .a = 1.0f});
         }
     }
 }
