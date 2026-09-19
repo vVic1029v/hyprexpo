@@ -41,6 +41,7 @@ class CDrawerAddon final : public Hyprexpo::Addon::IOverviewAddon {
     void pointerUp(const Vector2D& local) override;
 
     void wheel(double steps) override;
+    void wheel(double fingerDy, bool discrete); // mouse wheels speak standard direction (see impl)
     // Discrete touchpad open (docked only): burst accumulator that fires at
     // the threshold. Separate from the analog wheel()/touch drag paths.
     void wheelTouchOpen(double fingerDy);

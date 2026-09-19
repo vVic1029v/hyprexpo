@@ -1769,9 +1769,9 @@ COverview::COverview(PHLWORKSPACE startedOn_, PHLMONITOR monitor_, bool swipe_, 
             if (!OV->drawer.isFitted())
                 OV->drawer.wheelTouchOpen(raw * scrollScale(discrete));
             else if (discrete && raw > 0.0)
-                OV->drawer.wheel(raw * scrollScale(true) * 2.0);
+                OV->drawer.wheel(raw * scrollScale(true) * 2.0, true);
             else
-                OV->drawer.wheel(raw * scrollScale(discrete));
+                OV->drawer.wheel(raw * scrollScale(discrete), discrete);
             // The pointer didn't move, so the highlight would sit on the
             // wrong app after the content shifted: refresh it from the
             // cursor like a mouse move would.
