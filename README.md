@@ -196,7 +196,9 @@ make dev-build
   height, otherwise it springs back — opening and closing, mouse, touch,
   wheel, and touchpad alike. Closing pulls must start at the top of the
   list; pushes from deeper in only rubber-band (`drawer_resist`, default
-  `0.25`). The overview background is transparent by default (`bg_col`
+  `0.25`). The sheet carries its own background plate (search-top edge to
+  screen bottom), so it reads as one surface rising instead of icons over
+  the desktop. The overview background is transparent by default (`bg_col`
   alpha is honored); dimming and the opaque search well stay.
 - **Locked order, recent row.** No pin system: the first row holds the most
   recently launched apps (recorded to `~/.config/hyprexpo/drawer-recent`),
