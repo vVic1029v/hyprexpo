@@ -39,6 +39,7 @@ inline constexpr const char* CANCEL_KEY_DEFAULT              = "escape";
 inline constexpr int         SHOW_CURSOR_DEFAULT             = 1;
 inline constexpr int         SHOW_PINNED_WINDOWS_DEFAULT     = 0;
 inline constexpr int         DRAG_DROP_ENABLE_DEFAULT        = 1;
+inline constexpr int         TOUCH_HOLD_SLOP_PX_DEFAULT      = 20;
 inline constexpr int         SCROLLING_THUMBNAIL_BUDGET_DEFAULT = 4;
 inline constexpr int         SCROLLING_THUMBNAIL_BUDGET_MIN     = 1;
 inline constexpr int         SCROLLING_THUMBNAIL_BUDGET_MAX     = 16;
