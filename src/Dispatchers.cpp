@@ -477,6 +477,15 @@ static int luaExpo(lua_State* L) {
     return luaDispatchResult(L, "hyprexpo.expo", onExpoDispatcher(luaStringArg(L, 1, "hyprexpo.expo", "toggle")));
 }
 
+// Live open-state query for input layers (hyprgrass binds, touchpad
+// gestures): lets swipe actions stand down while the exposé owns the
+// screen, with zero lua-side flags to desync.
+static int luaIsOpen(lua_State* L) {
+    (void)L;
+    lua_pushboolean(L, overviewOpen() ? 1 : 0);
+    return 1;
+}
+
 static int luaDrawer(lua_State* L) {
     return luaDispatchResult(L, "hyprexpo.drawer", onDrawerDispatcher(luaStringArg(L, 1, "hyprexpo.drawer", "toggle")));
 }
@@ -835,6 +844,7 @@ void registerHyprexpoDispatchers() {
     HyprlandAPI::addDispatcherV2(PHANDLE, "hyprexpo:scrolling_mutation_test", onScrollingMutationTestDispatcher);
 
     HyprlandAPI::addLuaFunction(PHANDLE, "hyprexpo", "expo", luaExpo);
+    HyprlandAPI::addLuaFunction(PHANDLE, "hyprexpo", "is_open", luaIsOpen);
     HyprlandAPI::addLuaFunction(PHANDLE, "hyprexpo", "drawer", luaDrawer);
     HyprlandAPI::addLuaFunction(PHANDLE, "hyprexpo", "kb_focus", luaKbFocus);
     HyprlandAPI::addLuaFunction(PHANDLE, "hyprexpo", "kb_confirm", luaKbConfirm);
