@@ -383,6 +383,7 @@ int main() {
     expectContains(overviewConstructor, "images.resize((size_t)std::max<int64_t>(1, highestID))",
                    "the ribbon allocates the consecutive range, not a rectangular capacity");
     expectContains(overviewConstructor, "images[i].workspaceID = (int64_t)i + 1", "every tile names its own ID: 1..max, no gaps");
+    expectContains(overviewConstructor, "isNewWorkspace = true", "a trailing + tile past the range creates workspaces from the expose");
     expectAbsent(overviewConstructor, "SIDE_LENGTH", "construction and captures no longer square a rectangle");
     const auto currentShape = extractFunction(source, "Hyprexpo::SGridShape COverview::currentGridShape(");
     expectContains(currentShape, "return gridShape;", "every geometry consumer sees the resolved grid shape");

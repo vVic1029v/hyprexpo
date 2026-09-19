@@ -586,7 +586,10 @@ void COverview::fullRender() {
 
             const bool labelEnabled = **PLABELEN || showWorkspaceNumbers;
             const std::string labelShow = showWorkspaceNumbers ? "always" : std::string{*PLABELSHOW};
-            if (Hyprexpo::shouldShowWorkspaceLabel(labelEnabled, labelShow, (int)id == labelHoveredID, (int)id == kbFocusID, (int)id == openedID)) {
+            // The trailing "+" tile always labels itself: it is an
+            // affordance, not a workspace name, so label-visibility config
+            // must not hide it.
+            if (images[id].isNewWorkspace || Hyprexpo::shouldShowWorkspaceLabel(labelEnabled, labelShow, (int)id == labelHoveredID, (int)id == kbFocusID, (int)id == openedID)) {
                 std::string label;
                 const std::string mode = showWorkspaceNumbers ? std::string{"id"} : std::string{*PLABELMODE};
                 if (dynamicGrid && showWorkspaceNames) {
@@ -602,22 +605,27 @@ void COverview::fullRender() {
                     label = std::to_string(images[id].workspaceID);
                 }
 
+                // Trailing "+" tile: always "+", centered, whatever the label mode.
+                const std::string effAnchor = images[id].isNewWorkspace ? "center" : labelAnchor;
+                if (images[id].isNewWorkspace)
+                    label = "+";
+
                 const int st = resolveState((int)id);
                 if (!label.empty()) {
                     if (showWorkspaceNumbers)
-                        renderLabel(images[id].labelTexDefault, images[id].labelSizeDefault, label, CHyprColor{(uint64_t)**PWSNUMCOL}, 1.0f, tile, labelAnchor, **PLABELOX, **PLABELOY,
+                        renderLabel(images[id].labelTexDefault, images[id].labelSizeDefault, label, CHyprColor{(uint64_t)**PWSNUMCOL}, 1.0f, tile, effAnchor, **PLABELOX, **PLABELOY,
                                     labelFontSize);
                     else if (st == 1)
-                        renderLabel(images[id].labelTexHover, images[id].labelSizeHover, label, CHyprColor{(uint64_t)**PLCOLHOV}, **PLSCALEH, tile, labelAnchor, **PLABELOX,
+                        renderLabel(images[id].labelTexHover, images[id].labelSizeHover, label, CHyprColor{(uint64_t)**PLCOLHOV}, **PLSCALEH, tile, effAnchor, **PLABELOX,
                                     **PLABELOY, labelFontSize);
                     else if (st == 2)
-                        renderLabel(images[id].labelTexFocus, images[id].labelSizeFocus, label, CHyprColor{(uint64_t)**PLCOLFOC}, **PLSCALEF, tile, labelAnchor, **PLABELOX,
+                        renderLabel(images[id].labelTexFocus, images[id].labelSizeFocus, label, CHyprColor{(uint64_t)**PLCOLFOC}, **PLSCALEF, tile, effAnchor, **PLABELOX,
                                     **PLABELOY, labelFontSize);
                     else if (st == 3)
-                        renderLabel(images[id].labelTexCurrent, images[id].labelSizeCurrent, label, CHyprColor{(uint64_t)**PLCOLCUR}, 1.0f, tile, labelAnchor, **PLABELOX,
+                        renderLabel(images[id].labelTexCurrent, images[id].labelSizeCurrent, label, CHyprColor{(uint64_t)**PLCOLCUR}, 1.0f, tile, effAnchor, **PLABELOX,
                                     **PLABELOY, labelFontSize);
                     else
-                        renderLabel(images[id].labelTexDefault, images[id].labelSizeDefault, label, CHyprColor{(uint64_t)**PLCOLDEF}, 1.0f, tile, labelAnchor, **PLABELOX,
+                        renderLabel(images[id].labelTexDefault, images[id].labelSizeDefault, label, CHyprColor{(uint64_t)**PLCOLDEF}, 1.0f, tile, effAnchor, **PLABELOX,
                                     **PLABELOY, labelFontSize);
                 }
             }

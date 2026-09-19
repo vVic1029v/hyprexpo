@@ -94,6 +94,7 @@ class COverview final : public IOverviewSession {
     struct SWorkspaceImage {
         SP<Render::IFramebuffer> fb;
         int64_t                  workspaceID = -1;
+        bool                     isNewWorkspace = false; // trailing "+" tile: ID beyond range, created on select
         PHLWORKSPACE             pWorkspace;
         CBox                     box;
         // Label textures per state for customization

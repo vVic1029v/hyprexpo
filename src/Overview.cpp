@@ -1271,6 +1271,20 @@ COverview::COverview(PHLWORKSPACE startedOn_, PHLMONITOR monitor_, bool swipe_, 
             images[i].workspaceID = visibleWorkspaceIDs[i];
     }
 
+    // Trailing "+" tile, always one past whatever was provisioned (fixed
+    // range or dynamic grid): selecting it focuses an ID that does not
+    // exist yet, and the close path creates it (same helper as anchored
+    // nonexistent tiles) — a new workspace from the exposé. Appended last
+    // so it stays at the end under MRU sorts too.
+    {
+        int64_t topID = 0;
+        for (const auto& image : images)
+            topID = std::max(topID, image.workspaceID);
+        images.push_back(SWorkspaceImage{});
+        images.back().workspaceID    = topID + 1;
+        images.back().isNewWorkspace = true;
+    }
+
     // Ribbon opens scrolled to the active workspace; the rest of the
     // provisioned range pans in from either side.
     if (startedOn)
