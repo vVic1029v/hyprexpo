@@ -25,6 +25,7 @@
 #include <hyprland/src/state/MonitorState.hpp>
 #include <hyprland/src/state/WorkspaceState.hpp>
 #include <lua.hpp>
+#include "LuaEvents.hpp"
 #include <xkbcommon/xkbcommon.h>
 #include <algorithm>
 #include <charconv>
@@ -852,4 +853,6 @@ void registerHyprexpoDispatchers() {
     HyprlandAPI::addLuaFunction(PHANDLE, "hyprexpo", "kb_select", luaKbSelectToken);
     HyprlandAPI::addLuaFunction(PHANDLE, "hyprexpo", "kb_selecti", luaKbSelectIndex);
     HyprlandAPI::addLuaFunction(PHANDLE, "hyprexpo", "gesture", luaGesture);
+    HyprlandAPI::addLuaFunction(PHANDLE, "hyprexpo", "on", Hyprexpo::LuaEvents::luaOn);
+    HyprlandAPI::addLuaFunction(PHANDLE, "hyprexpo", "consume", Hyprexpo::LuaEvents::luaConsume);
 }

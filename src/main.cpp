@@ -9,11 +9,14 @@
 
 #include "Dispatchers.hpp"
 #include "Drawer.hpp"
+#include "LuaEvents.hpp"
 #include "globals.hpp"
 #include "IOverviewSession.hpp"
 #include "Overview.hpp"
 #include "OverviewCapture.hpp"
 #include "PluginConfig.hpp"
+#include <hyprland/src/managers/SeatManager.hpp>
+#include <hyprland/src/devices/IKeyboard.hpp>
 #include <stdexcept>
 #include <string>
 
@@ -128,6 +131,22 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
     });
 
     static auto PKEY = Event::bus()->m_events.input.keyboard.key.listen([](IKeyboard::SKeyEvent event, Event::SCallbackInfo& info) {
+        // Faucet first: Lua sees every key (consume => skip the whole chain
+        // below, including search/cancel/digits/nav/swallow).
+        {
+            const auto KEYBOARD = g_pSeatManager->m_keyboard.lock();
+            uint32_t   sym      = 0;
+            if (KEYBOARD && KEYBOARD->m_xkbState)
+                sym = xkb_state_key_get_one_sym(KEYBOARD->m_xkbState, event.keycode + 8);
+            const bool pressed = event.state == WL_KEYBOARD_KEY_STATE_PRESSED;
+            if (Hyprexpo::LuaEvents::fire("key", [&](lua_State* L) {
+                    Hyprexpo::LuaEvents::pushKey(L, sym, event.keycode, pressed);
+                    return 1;
+                })) {
+                info.cancelled = true;
+                return;
+            }
+        }
         // Drawer search eats printable/editing keys while focused (digits
         // included: they filter instead of workspace-jumping).
         if (auto* const OV = dynamic_cast<COverview*>(activeOverview())) {
