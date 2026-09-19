@@ -1,4 +1,5 @@
 #include "Overview.hpp"
+#include "LuaEvents.hpp"
 #include <any>
 #include <map>
 #include "HyprlandConfigCompat.hpp"
@@ -1471,6 +1472,19 @@ COverview::COverview(PHLWORKSPACE startedOn_, PHLMONITOR monitor_, bool swipe_, 
     drawer.onOpen();
     drawer.focusSearch(); // typing goes straight to the drawer search box
 
+    // hyprexpo.on() faucet state: last positions for delta computation.
+    // Kept here (not in LuaEvents) because coordinate spaces are compositor
+    // business; Lua only ever sees deltas.
+    static Vector2D                    s_cursorLast{0.0, 0.0};
+    static bool                        s_cursorInit = false;
+    static std::map<int32_t, Vector2D> s_touchLast;
+    auto touchGlobal = [](const Vector2D& pos) {
+        const auto MON = Desktop::focusState()->monitor();
+        if (!MON)
+            return pos;
+        return MON->m_position + Vector2D{pos.x * MON->m_size.x, pos.y * MON->m_size.y};
+    };
+
     auto onCursorMove = [this](Event::SCallbackInfo& info) {
         if (closing)
             return;
@@ -1618,13 +1632,26 @@ COverview::COverview(PHLWORKSPACE startedOn_, PHLMONITOR monitor_, bool swipe_, 
     // a press on the session under the finger. Releasing before the hold
     // timeout replays the historical tap below; holding past it (or moving
     // past the drag threshold) engages the window-drag machinery instead.
-    auto onTouchDown = [](const ITouch::SDownEvent& event, Event::SCallbackInfo& info) {
+    auto onTouchDown = [&](const ITouch::SDownEvent& event, Event::SCallbackInfo& info) {
         if (info.cancelled)
             return;
 
         auto MON = event.device && !event.device->m_boundOutput.empty() ? State::monitorState()->query().name(event.device->m_boundOutput).run() : PHLMONITOR{};
         if (!MON)
             MON = Desktop::focusState()->monitor();
+
+        // Faucet first: Lua sees every press (consume => skip default).
+        if (MON) {
+            const Vector2D downG = MON->m_position + event.pos * MON->m_size;
+            s_touchLast[event.touchID] = downG;
+            if (Hyprexpo::LuaEvents::fire("touchdown", [&](lua_State* L) {
+                    Hyprexpo::LuaEvents::pushTouch(L, event.touchID, downG.x, downG.y, event.timeMs);
+                    return 1;
+                })) {
+                info.cancelled = true;
+                return;
+            }
+        }
 
         auto* const TARGET = dynamic_cast<COverview*>(overviewForMonitor(MON));
         if (!TARGET || TARGET->closing)
@@ -1637,8 +1664,33 @@ COverview::COverview(PHLWORKSPACE startedOn_, PHLMONITOR monitor_, bool swipe_, 
         TARGET->touchPressDown(event.touchID, downGlobal, MON);
     };
 
-    mouseMoveHook = Event::bus()->m_events.input.mouse.move.listen([onCursorMove](const Vector2D&, Event::SCallbackInfo& info) { onCursorMove(info); });
-    touchMoveHook = Event::bus()->m_events.input.touch.motion.listen([onCursorMove](const ITouch::SMotionEvent& event, Event::SCallbackInfo& info) {
+    mouseMoveHook = Event::bus()->m_events.input.mouse.move.listen([onCursorMove, &s_cursorLast, &s_cursorInit](const Vector2D& pos, Event::SCallbackInfo& info) {
+        const Vector2D dd = s_cursorInit ? Vector2D{pos.x - s_cursorLast.x, pos.y - s_cursorLast.y} : Vector2D{0.0, 0.0};
+        s_cursorLast       = pos;
+        s_cursorInit       = true;
+        if (Hyprexpo::LuaEvents::fire("mousemove", [&](lua_State* L) {
+                Hyprexpo::LuaEvents::pushPointer(L, pos.x, pos.y, dd.x, dd.y);
+                return 1;
+            })) {
+            info.cancelled = true;
+            return;
+        }
+        onCursorMove(info);
+    });
+    touchMoveHook = Event::bus()->m_events.input.touch.motion.listen([onCursorMove, &s_touchLast, &touchGlobal](const ITouch::SMotionEvent& event, Event::SCallbackInfo& info) {
+        const Vector2D G = touchGlobal(event.pos);
+        Vector2D       dd{0.0, 0.0};
+        const auto     it = s_touchLast.find(event.touchID);
+        if (it != s_touchLast.end())
+            dd = Vector2D{G.x - it->second.x, G.y - it->second.y};
+        s_touchLast[event.touchID] = G;
+        if (Hyprexpo::LuaEvents::fire("touchmotion", [&](lua_State* L) {
+                Hyprexpo::LuaEvents::pushTouchMotion(L, event.touchID, G.x, G.y, dd.x, dd.y, event.timeMs);
+                return 1;
+            })) {
+            info.cancelled = true;
+            return;
+        }
         if (auto* const OWNER = COverview::touchOwner(event.touchID)) {
             OWNER->touchMotionEvent(event.touchID, event.pos);
             return;
@@ -1668,21 +1720,71 @@ COverview::COverview(PHLWORKSPACE startedOn_, PHLMONITOR monitor_, bool swipe_, 
             return;
         onCursorMove(info);
     });
-    mouseButtonHook = Event::bus()->m_events.input.mouse.button.listen([onCursorSelect](const IPointer::SButtonEvent& event, Event::SCallbackInfo& info) { onCursorSelect(event, info); });
+    mouseButtonHook = Event::bus()->m_events.input.mouse.button.listen([onCursorSelect](const IPointer::SButtonEvent& event, Event::SCallbackInfo& info) {
+        {
+            const Vector2D G       = g_pInputManager->getMouseCoordsInternal();
+            const bool     pressed = event.state == WL_POINTER_BUTTON_STATE_PRESSED;
+            if (Hyprexpo::LuaEvents::fire("mousebutton", [&](lua_State* L) {
+                    Hyprexpo::LuaEvents::pushButton(L, event.button, pressed, G.x, G.y, event.timeMs);
+                    return 1;
+                })) {
+                info.cancelled = true;
+                return;
+            }
+        }
+        onCursorSelect(event, info);
+    });
     touchDownHook = Event::bus()->m_events.input.touch.down.listen([onTouchDown](const ITouch::SDownEvent& event, Event::SCallbackInfo& info) { onTouchDown(event, info); });
-    touchUpHook = Event::bus()->m_events.input.touch.up.listen([](const ITouch::SUpEvent& event, Event::SCallbackInfo& info) {
+    touchUpHook = Event::bus()->m_events.input.touch.up.listen([&](const ITouch::SUpEvent& event, Event::SCallbackInfo& info) {
+        {
+            const auto it = s_touchLast.find(event.touchID);
+            const Vector2D G = it != s_touchLast.end() ? it->second : Vector2D{0.0, 0.0};
+            s_touchLast.erase(event.touchID);
+            if (Hyprexpo::LuaEvents::fire("touchup", [&](lua_State* L) {
+                    Hyprexpo::LuaEvents::pushTouch(L, event.touchID, G.x, G.y, event.timeMs);
+                    return 1;
+                })) {
+                info.cancelled = true;
+                return;
+            }
+        }
         if (auto* const OWNER = COverview::touchOwner(event.touchID)) {
             info.cancelled = true;
             OWNER->touchPressUp(event.touchID);
         }
     });
-    touchCancelHook = Event::bus()->m_events.input.touch.cancel.listen([](const ITouch::SCancelEvent& event, Event::SCallbackInfo& info) {
+    touchCancelHook = Event::bus()->m_events.input.touch.cancel.listen([&](const ITouch::SCancelEvent& event, Event::SCallbackInfo& info) {
+        {
+            const auto it = s_touchLast.find(event.touchID);
+            const Vector2D G = it != s_touchLast.end() ? it->second : Vector2D{0.0, 0.0};
+            s_touchLast.erase(event.touchID);
+            if (Hyprexpo::LuaEvents::fire("touchcancel", [&](lua_State* L) {
+                    Hyprexpo::LuaEvents::pushTouch(L, event.touchID, G.x, G.y, event.timeMs);
+                    return 1;
+                })) {
+                info.cancelled = true;
+                return;
+            }
+        }
         if (auto* const OWNER = COverview::touchOwner(event.touchID)) {
             info.cancelled = true;
             OWNER->touchPressCancel(event.touchID);
         }
     });
     mouseAxisHook = Event::bus()->m_events.input.mouse.axis.listen([](const IPointer::SAxisEvent& event, Event::SCallbackInfo& info) {
+        {
+            const Vector2D G     = g_pInputManager->getMouseCoordsInternal();
+            const bool     horiz = event.axis == WL_POINTER_AXIS_HORIZONTAL_SCROLL;
+            const bool     disc  = event.source == WL_POINTER_AXIS_SOURCE_WHEEL || event.deltaDiscrete != 0;
+            if (Hyprexpo::LuaEvents::fire("mousewheel", [&](lua_State* L) {
+                    Hyprexpo::LuaEvents::pushWheel(L, horiz ? "horizontal" : "vertical", event.delta, disc ? 1 : 0, (int)event.source, G.x,
+                                                  G.y, event.timeMs);
+                    return 1;
+                })) {
+                info.cancelled = true;
+                return;
+            }
+        }
         // Wheel / touchpad scroll while the exposé is open. Vertical over
         // the drawer pulls it (or snaps it docked<->fitted); horizontal over
         // the ribbon pans the workspace strip; vertical over the ribbon does

@@ -331,6 +331,13 @@ make dev-build
 - **Dispatchers.** `hyprexpo:drawer expand|collapse|toggle` animates the
   sheet through the same pull engine (never closes the overview itself);
   use `hyprexpo:expo` to open/close/toggle the overview.
+- **Lua input faucet.** `hyprexpo.on(event, fn)` forwards raw input to Lua;
+  a truthy return consumes the event (the C++ default is skipped), anything
+  else falls through unchanged. `hyprexpo.consume()` does the same from
+  inside a handler. Events: `touchdown/motion/up/cancel` (`id,x,y,dx,dy,t`),
+  `mousemove` (`x,y,dx,dy`), `mousebutton` (`button,pressed,x,y,t`),
+  `mousewheel` (`axis,delta,discrete,source,x,y,t`), `key`
+  (`keysym,keycode,pressed`). `hyprexpo.on(ev, nil)` unregisters.
 - **On-screen keyboard.** Taps landing on a known keyboard layer surface
   (`plugin:hyprexpo:osk_namespaces`, default filled with `wvkbd`, plus
   first-detect auto-learn) fall through to the client instead of being
