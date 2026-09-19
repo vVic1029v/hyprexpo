@@ -97,9 +97,11 @@ float drawerCfgResist() {
 constexpr double RESIST_CAP_PX = 28.0;
 // Breathing room between the recent row and the locked grid below it.
 constexpr double RECENT_PAD_PX = 20.0;
-// Wheel/touchpad detent: without a release event, a push must travel past
-// the threshold AND keep pushing against this wall to commit. Anything
-// shorter springs back on idle instead of toggling on a small flick.
+// Wheel/touchpad visual wall: without a release event, pushes may travel
+// one overshoot past the commit threshold so the sheet visibly strains on
+// the committing push. Commit itself happens AT the threshold (same bar as
+// a finger release); anything shorter springs back on idle instead of
+// toggling on a small flick.
 constexpr double COMMIT_OVERSHOOT_PX = 24.0;
 // Touch fling tuning: release slope is measured over this trailing window
 // (never from a single instant delta); inertia below MIN never starts,
@@ -341,6 +343,40 @@ double CDrawerAddon::listScroll(double fingerDy) {
 // they ride the same visual pull as fingers, plus a detent: a push must
 // travel past the threshold AND keep pushing against the wall to commit.
 // Anything shorter visibly springs back once the burst goes idle.
+// Discrete touchpad open for a docked sheet: touchpads have no release
+// event, so instead of the analog detent, accumulate open-direction travel
+// and fire at half the pull threshold. Deliberately forgiving: wrong-way
+// events are ignored (never reset progress — scroll bursts wobble), only a
+// >0.5s gap restarts the burst. The sheet tracks progress live, scaled so it
+// visibly strains all the way to the full threshold as the burst nears the
+// fire line. Touch drags (touchMotion) and fitted list scrolls (wheel())
+// never enter here.
+void CDrawerAddon::wheelTouchOpen(double fingerDy) {
+    if (m_owner->closeCommitted() || state.fitted)
+        return;
+    const double now       = pullStamp();
+    const double threshold = pullThreshold();
+    const double span      = pullSpan();
+    if (span <= 0.0)
+        return;
+    const double fireAt = threshold * 0.5;
+    if (now - state.wheelAccS > 0.5) {
+        state.wheelAcc = 0.0;
+    }
+    state.wheelAccS = now;
+    if (fingerDy < 0.0)
+        state.wheelAcc += -fingerDy; // wrong-way events ignored, never reset
+    if (state.wheelAcc >= fireAt) {
+        state.wheelAcc = 0.0;
+        // No visual reset: commitPull seeds the open animation from the
+        // strained sheet position, so there is no jump back to docked.
+        commitPull(true, span);
+    } else {
+        state.pullVisual = -(state.wheelAcc / fireAt) * threshold;
+    }
+    m_owner->damage();
+}
+
 void CDrawerAddon::wheel(double fingerDy) {
     if (m_owner->closeCommitted())
         return;
@@ -354,9 +390,12 @@ void CDrawerAddon::wheel(double fingerDy) {
         if (state.pullVisual < 0.0 || fingerDy < 0.0) {
             // A live pull tracks both directions; fresh pushes still
             // detent-gate. Only idle snaps it home, never a reversal.
-            // Detent order matters: commit only when already holding
-            // against the wall and still pushing.
-            if (fingerDy < 0.0 && state.pullVisual <= -(threshold + COMMIT_OVERSHOOT_PX))
+            // Wheel commits AT the threshold like a finger release does
+            // (endDrag): there is no release event to confirm intent, so
+            // still pushing past the threshold IS the confirmation. The
+            // visual wall sits one overshoot beyond so the sheet visibly
+            // strains against it on the committing push.
+            if (fingerDy < 0.0 && state.pullVisual <= -threshold)
                 commitPull(true, span);
             else
                 pushVisual(fingerDy, -(threshold + COMMIT_OVERSHOOT_PX), 0.0);
@@ -368,9 +407,10 @@ void CDrawerAddon::wheel(double fingerDy) {
     }
     if (state.pullVisual > 0.0) {
         // A live pull tracks both directions like a finger: reversals walk
-        // the sheet back, crossing zero spills into the list, and only the
-        // detent (wheel) or the release (finger) may send it home.
-        if (fingerDy > 0.0 && state.pullVisual >= threshold + COMMIT_OVERSHOOT_PX) {
+        // the sheet back, crossing zero spills into the list. Wheel commits
+        // AT the threshold like a finger release (endDrag), for the same
+        // reason as the docked branch above.
+        if (fingerDy > 0.0 && state.pullVisual >= threshold) {
             commitPull(false, span);
         } else {
             const double next = state.pullVisual + fingerDy;
@@ -765,8 +805,12 @@ void CDrawerAddon::stepFrame() {
     // sheet springs back to rest once input goes idle — but never while a
     // press is physically down. A resting finger sends no motion events,
     // so without the activity gate the sheet would snap back underneath
-    // a held finger.
-    if (!state.pulling && state.pullVisual != 0.0 && !state.touchDownActive && !state.mouseArmed && now - state.lastPullS > 0.15) {
+    // a held finger. Touchpad scroll bursts get the same protection on
+    // their own clock: slow scrolls arrive sparse (>0.15s gaps), and the
+    // idle snap must not yank the sheet down between ticks of one burst —
+    // only true silence (>0.5s) ends it.
+    if (!state.pulling && state.pullVisual != 0.0 && !state.touchDownActive && !state.mouseArmed && now - state.lastPullS > 0.15 &&
+        now - state.wheelAccS > 0.5) {
         state.pullVisual += (0.0 - state.pullVisual) * std::min(1.0, dt * 12.0);
         if (std::abs(state.pullVisual) < 0.5)
             state.pullVisual = 0.0;
