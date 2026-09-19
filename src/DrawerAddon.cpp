@@ -901,31 +901,37 @@ void CDrawerAddon::renderPass() {
     const double tw = tileW();
     const double rh = rowH();
     const int iconPx = drawerCfgIconPx();
+    // Tiles fade out over their own height as they slide under the search
+    // bar instead of popping whole: alpha tracks how much of the tile is
+    // still below the bar's bottom edge — fully visible clear of it, gone
+    // exactly when fully behind it.
+    const double barBottom = sTop + sH;
     for (size_t oi = 0; oi < state.order.size(); ++oi) {
         if (state.order[oi] == Hyprexpo::Drawer::EMPTY_SLOT)
             continue; // recent-row padding hole: no tile, no hit test
         CBox tile = tileBox((int)oi);
         if (tile.y + tile.h < top() || tile.y > top() + clipH())
             continue;
-        // Apps disappear underneath the search bar instead of rendering
-        // on top of it: anything reaching into the strip is culled whole.
-        if (tile.y < sTop + sH)
-            continue;
+        const double vis = tile.h > 0.0 ? smooth01(std::clamp((tile.y + tile.h - barBottom) / tile.h, 0.0, 1.0)) : 1.0;
+        if (vis <= 0.0)
+            continue; // fully behind the search bar: despawned, not drawn
+        const float alpha = (float)vis;
         const auto& app = state.apps[state.order[oi]];
         if ((int)oi == state.hoverApp) {
+            const uint32_t ha = (uint32_t)(0x24 * vis);
             CBox hb = toPhys(CBox{{tile.x - 6.0, tile.y - 6.0}, {tile.w + 12.0, tile.h + 12.0}});
-            Render::GL::g_pHyprOpenGL->renderRect(hb, CHyprColor{0x242ac3de}, {.round = 12});
+            Render::GL::g_pHyprOpenGL->renderRect(hb, CHyprColor{(uint64_t)((ha << 24) | 0x2ac3de)}, {.round = 12});
         }
         auto icon = iconTexture(app, iconPx, sc);
         if (icon) {
             const double isz = (double)iconPx;
             CBox ibox = toPhys(CBox{{tile.x + (tile.w - isz) / 2.0, tile.y + 8.0}, {isz, isz}});
-            Render::GL::g_pHyprOpenGL->renderTextureInternal(icon, ibox, {.damage = &damage, .a = 1.0f, .round = 10});
+            Render::GL::g_pHyprOpenGL->renderTextureInternal(icon, ibox, {.damage = &damage, .a = alpha, .round = 10});
         }
         auto label = labelTexture(app, sc);
         if (label) {
             CBox lbox = toPhys(CBox{{tile.x, tile.y + 8.0 + (double)iconPx + 4.0}, {tile.w, 30.0}});
-            Render::GL::g_pHyprOpenGL->renderTextureInternal(label, lbox, {.damage = &damage, .a = 1.0f});
+            Render::GL::g_pHyprOpenGL->renderTextureInternal(label, lbox, {.damage = &damage, .a = alpha});
         }
     }
 }
