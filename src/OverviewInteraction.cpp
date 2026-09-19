@@ -562,24 +562,16 @@ void COverview::touchPressUp(int32_t touchID) {
         if (std::hypot(md.x, md.y) >= TOUCH_DRAG_PX)
             return;
     }
-    // tap: select-workspace-first. First tap on a tile only focuses it
-    // (green outline, stays open); tapping the focused tile confirms and
-    // goes. Apps launched afterwards open on the focused workspace.
+    // tap: goes immediately. Workspace pre-selection is arrows-only
+    // (kbFocus): taps and clicks never focus, they select.
     if (OWNER->size->getPercent() < 0.05f) {
         OWNER->close(false);
         return;
     }
     OWNER->lastMousePosLocal = upGlobal - mon->m_position;
     OWNER->updateHoveredFromMouse();
-    if (OWNER->selectHoveredWorkspace()) {
-        if (OWNER->kbFocusID != OWNER->closeOnID) {
-            OWNER->kbFocusID = OWNER->closeOnID;
-            OWNER->closeOnID = -1;
-            OWNER->damage();
-        } else {
-            closeOverviewsSelecting(OWNER);
-        }
-    }
+    if (OWNER->selectHoveredWorkspace())
+        closeOverviewsSelecting(OWNER);
 }
 
 void COverview::touchPressCancel(int32_t touchID) {
@@ -758,84 +750,26 @@ bool COverview::moveFocus(int dx, int dy) {
     if (kbFocusID == -1)
         return false;
 
-    const auto shape = currentGridShape();
-    int x = kbFocusID % shape.cols;
-    int y = kbFocusID / shape.cols;
+    // Stateless linear walk: right/down = next valid tile, left/up =
+    // previous, wrapping at the ends. No grid shape, no wrap flags, no
+    // reading modes — arrows always land somewhere sane, including the
+    // trailing "+" tile (a valid neighbor past the range). The old
+    // shape-bound scans could bounce between two tiles or strand the
+    // focus when the shape disagreed with the provisioned images.
+    int step = 0;
+    if (dx > 0 || dy > 0)
+        step = 1;
+    else if (dx < 0 || dy < 0)
+        step = -1;
+    else
+        return false;
 
-    static auto* const* PWRAPH = (Hyprlang::INT* const*)HyprlandAPI::getConfigValue(PHANDLE, "plugin:hyprexpo:keynav_wrap_h")->getDataStaticPtr();
-    static auto* const* PWRAPV = (Hyprlang::INT* const*)HyprlandAPI::getConfigValue(PHANDLE, "plugin:hyprexpo:keynav_wrap_v")->getDataStaticPtr();
-
-    if (dx != 0) {
-        // Trailing "+" tile: always a valid horizontal neighbor past the
-        // end (and back), regardless of grid shape — it lives past the
-        // range the shape was computed for.
-        if (!images.empty() && images.back().isNewWorkspace) {
-            const int plus = (int)images.size() - 1;
-            if (dx > 0 && kbFocusID == plus - 1 && isTileValid(plus)) {
-                kbFocusID = plus;
-                return true;
-            }
-            if (dx < 0 && kbFocusID == plus && plus - 1 >= 0 && isTileValid(plus - 1)) {
-                kbFocusID = plus - 1;
-                return true;
-            }
-        }
-        static auto* const* PREADING = (Hyprlang::INT* const*)HyprlandAPI::getConfigValue(PHANDLE, "plugin:hyprexpo:keynav_reading_order")->getDataStaticPtr();
-        int                 step     = dx > 0 ? 1 : -1;
-        if (**PREADING) {
-            // reading-order scan: proceed linearly across the grid (row-major)
-            const int total = (int)images.size();
-            int       idx   = kbFocusID;
-            for (int tries = 0; tries < total; ++tries) {
-                idx += step;
-                if (idx < 0 || idx >= total) {
-                    // wrap only if both wraps are enabled (edge of grid)
-                    if (**PWRAPH && **PWRAPV)
-                        idx = (idx + total) % total;
-                    else
-                        break;
-                }
-                if (isTileValid(idx)) {
-                    kbFocusID = idx;
-                    return true;
-                }
-            }
-        } else {
-            // in-row scan with optional horizontal wrap
-            int nx = x;
-            for (int tries = 0; tries < shape.cols; ++tries) {
-                nx += step;
-                if (nx < 0 || nx >= shape.cols) {
-                    if (**PWRAPH)
-                        nx = (nx + shape.cols) % shape.cols;
-                    else
-                        break;
-                }
-                const int nid = nx + y * shape.cols;
-                if (isTileValid(nid)) {
-                    kbFocusID = nid;
-                    return true;
-                }
-            }
-        }
-    }
-
-    if (dy != 0) {
-        int step = dy > 0 ? 1 : -1;
-        int ny   = y;
-        for (int tries = 0; tries < shape.rows; ++tries) {
-            ny += step;
-            if (ny < 0 || ny >= shape.rows) {
-                if (**PWRAPV)
-                    ny = (ny + shape.rows) % shape.rows;
-                else
-                    break;
-            }
-            const int nid = x + ny * shape.cols;
-            if (isTileValid(nid)) {
-                kbFocusID = nid;
-                return true;
-            }
+    const int total = (int)images.size();
+    for (int tries = 0; tries < total; ++tries) {
+        const int idx = (kbFocusID + step * (tries + 1) % total + total) % total;
+        if (isTileValid(idx)) {
+            kbFocusID = idx;
+            return true;
         }
     }
     return false;
