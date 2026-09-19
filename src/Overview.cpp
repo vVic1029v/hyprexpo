@@ -44,8 +44,11 @@
 #include <cctype>
 #include <chrono>
 #include <cmath>
+#include <ctime>
+#include <fstream>
 #include <optional>
 #include <string>
+#include <sys/stat.h>
 #include <vector>
 #include <hyprutils/utils/ScopeGuard.hpp>
 
@@ -1087,6 +1090,25 @@ void COverview::ribbonPanBy(double fingerDx) {
     ribbonScrollBy(-fingerDx);
 }
 
+namespace {
+// /tmp/touchpad-fingers, maintained by touch/fingers-watch.py: "1" while any
+// finger touches the pad, "0" when all lifted. Missing or stale (>2s) file
+// counts as unknown, which allows the fling (fail-open: behaves as if the
+// watcher never existed). A fresh "1" vetoes it: the fingers never left.
+bool touchpadFingersUp() {
+    struct stat st;
+    if (stat("/tmp/touchpad-fingers", &st) != 0)
+        return true;
+    if (std::time(nullptr) - st.st_mtime > 2)
+        return true;
+    std::ifstream f("/tmp/touchpad-fingers");
+    std::string   s;
+    if (!(f >> s))
+        return true;
+    return s != "1";
+}
+} // namespace
+
 void COverview::stepRibbon() {
     const double now = std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
     const double dt  = ribbonLastStepS <= 0.0 ? 0.016 : std::min(0.1, now - ribbonLastStepS);
@@ -1121,6 +1143,11 @@ void COverview::stepRibbon() {
         // the pump dies with the burst and the idle eval never runs.
         if (!closing && !drawer.hidesRibbon() && wheelS > 0.0 && now - wheelS > 0.05 && now - wheelS < 0.5) {
             ribbonVel = Hyprexpo::Fling::startVelocityDirect(wheelTrack.slope(now));
+            if (ribbonVel != 0.0 && !touchpadFingersUp()) {
+                // Fingers never left: a pause mid-gesture, not a release.
+                // Swallow it (consumed, no refire) instead of flinging.
+                ribbonVel = 0.0;
+            }
             wheelS    = 0.0;
             wheelTrack.reset();
             if (ribbonVel != 0.0)
@@ -1562,18 +1589,8 @@ COverview::COverview(PHLWORKSPACE startedOn_, PHLMONITOR monitor_, bool swipe_, 
                 return;
         }
 
-        if (TARGET && TARGET->selectHoveredWorkspace()) {
-            // Select-workspace-first, like touch: first click focuses the
-            // tile (green outline, stays open), clicking the focused tile
-            // confirms and goes.
-            if (TARGET->kbFocusID != TARGET->closeOnID) {
-                TARGET->kbFocusID = TARGET->closeOnID;
-                TARGET->closeOnID = -1;
-                TARGET->damage();
-            } else {
-                closeOverviewsSelecting(TARGET);
-            }
-        }
+        if (TARGET && TARGET->selectHoveredWorkspace())
+            closeOverviewsSelecting(TARGET);
     };
 
     // Touch hold-to-drag wrapper (classic grid path): a touch down only arms
