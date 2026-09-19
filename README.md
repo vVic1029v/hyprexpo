@@ -298,7 +298,11 @@ make dev-build
 - **Workspace ribbon.** All provisioned workspaces in one pannable strip
   (16:10 tiles, `ribbon_scale`), auto-scrolled to the active workspace on
   open. Tiles are always the consecutive range 1 through the highest
-  in-use workspace ID — no windows, no skipping, bottom-to-top. Pan with horizontal wheel / two-finger swipe, touchscreen swipe,
+  the last workspace. Tiles are always the consecutive range 1 through the highest
+  in-use workspace ID — no windows, no skipping, bottom-to-top — plus one
+  trailing tile indexed `+` in the middle: selecting it (tap, keyboard,
+  drag-drop, or its number) focuses an ID past the range, which the close
+  path creates, so new workspaces are born from inside the exposé. Pan with horizontal wheel / two-finger swipe, touchscreen swipe,
   or `hyprexpo:drawer`-style drags; touch rules are deterministic: sideways
   swipe always pans, only a still 350 ms hold picks a window up, anything
   else never grabs or selects by accident. Three-finger swipe up opens the
