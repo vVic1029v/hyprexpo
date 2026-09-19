@@ -387,7 +387,9 @@ void CDrawerAddon::wheelTouchOpen(double fingerDy) {
 }
 
 void CDrawerAddon::wheel(double fingerDy) {
-    if (m_owner->closeCommitted())
+    // Fitted-sheet only: docked sheets take wheelTouchOpen (the hook routes
+    // by fitted state), so there is no docked branch here by design.
+    if (m_owner->closeCommitted() || !state.fitted)
         return;
     state.flingVel = 0.0; // wheel takes over: inertia stops
     pullStamp();
@@ -395,30 +397,12 @@ void CDrawerAddon::wheel(double fingerDy) {
     const double span      = pullSpan();
     if (span <= 0.0)
         return;
-    if (!state.fitted) {
-        if (state.pullVisual < 0.0 || fingerDy < 0.0) {
-            // A live pull tracks both directions; fresh pushes still
-            // detent-gate. Only idle snaps it home, never a reversal.
-            // Wheel commits AT the threshold like a finger release does
-            // (endDrag): there is no release event to confirm intent, so
-            // still pushing past the threshold IS the confirmation. The
-            // visual wall sits one overshoot beyond so the sheet visibly
-            // strains against it on the committing push.
-            if (fingerDy < 0.0 && state.pullVisual <= -threshold)
-                commitPull(true, span);
-            else
-                pushVisual(fingerDy, -(threshold + COMMIT_OVERSHOOT_PX), 0.0);
-        } else {
-            state.pullVisual = 0.0;
-        }
-        m_owner->damage();
-        return;
-    }
     if (state.pullVisual > 0.0) {
         // A live pull tracks both directions like a finger: reversals walk
         // the sheet back, crossing zero spills into the list. Wheel commits
-        // AT the threshold like a finger release (endDrag), for the same
-        // reason as the docked branch above.
+        // AT the threshold like a finger release (endDrag): there is no
+        // release event to confirm intent, so still pushing past the
+        // threshold IS the confirmation.
         if (fingerDy > 0.0 && state.pullVisual >= threshold) {
             commitPull(false, span);
         } else {
