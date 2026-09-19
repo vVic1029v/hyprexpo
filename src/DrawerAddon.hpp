@@ -7,6 +7,7 @@
 // ribbon band above the docked sheet).
 #include "Addon.hpp"
 #include "Drawer.hpp"
+#include "HyprexpoLogic.hpp"
 
 #include <hyprland/src/render/Texture.hpp>
 #include <hyprutils/math/Box.hpp>
@@ -93,14 +94,10 @@ class CDrawerAddon final : public Hyprexpo::Addon::IOverviewAddon {
         // while a finger is physically down (resting fingers send no
         // motion events to refresh the idle clock).
         bool touchDownActive = false;
-        // List fling (touch inertia): scroll-space velocity + trailing
-        // motion samples for release-slope measurement.
+        // List fling (touch inertia): shared Fling tracker (same physics as
+        // the ribbon strip) + scroll-space velocity.
         double flingVel = 0.0;
-        double velCumY  = 0.0;
-        static constexpr int VEL_SAMPLES = 8;
-        double velT[VEL_SAMPLES] = {};
-        double velY[VEL_SAMPLES] = {};
-        int    velCount          = 0;
+        Hyprexpo::Fling::STracker velTrack;
     };
     State state;
 

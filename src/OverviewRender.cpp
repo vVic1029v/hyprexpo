@@ -710,6 +710,7 @@ void COverview::fullRender() {
     } // showRibbon (drawer fitted hides the workspace ribbon)
 
     drawer.stepFrame();
+    stepRibbon();
     drawer.renderPass();
 
     if (entryAnimationPending)

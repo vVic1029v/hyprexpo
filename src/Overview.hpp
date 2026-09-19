@@ -152,6 +152,7 @@ class COverview final : public IOverviewSession {
     double     ribbonMaxScroll() const; // pan range px (0 when the strip fits)
     void       ribbonScrollBy(double deltaPx); // wheel: content moves against delta
     void       ribbonPanBy(double fingerDx);   // touch: content follows the finger
+    void       stepRibbon();                   // per-frame strip inertia (shared fling physics)
     void       ribbonScrollToWorkspace(int wsid); // center the tile (open-time)
 
   private:
@@ -174,6 +175,7 @@ class COverview final : public IOverviewSession {
         SP<CEventLoopTimer> holdTimer;
     };
     STouchPress touchPress;
+    bool ribbonMousePan = false; // right-drag on the ribbon pans the strip (scroll only)
 
     static COverview* touchOwner(int32_t touchID);
     void touchPressDown(int32_t touchID, const Vector2D& global, const PHLMONITOR& monitor);
@@ -207,6 +209,9 @@ class COverview final : public IOverviewSession {
 
     Vector2D                     lastMousePosLocal = Vector2D{};
     double                       ribbonScrollX = 0.0; // horizontal pan offset px
+    double                       ribbonVel     = 0.0; // strip inertia, same physics as the drawer list
+    double                       ribbonLastStepS = 0.0;
+    Hyprexpo::Fling::STracker    ribbonTrack; // finger travel samples for release slope
 
     int                          openedID  = -1;
     int                          closeOnID = -1;

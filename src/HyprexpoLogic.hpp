@@ -2,6 +2,8 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <algorithm>
+#include <cmath>
 #include <optional>
 #include <string>
 #include <vector>
@@ -265,6 +267,61 @@ struct SSample {
 // Finger-space px/s over [now - windowS, now]; 0 when undersampled or
 // degenerate (still finger, single sample, zero span).
 double releaseSlope(const std::vector<SSample>& ordered, double now, double windowS);
+
+// Shared inertia constants: every flinger (drawer list, ribbon strip)
+// starts, clamps, and drains velocity with these, so all surfaces feel
+// identical. Values are the drawer-proven ones.
+inline constexpr double MIN_PX_S  = 350.0; // below: no inertia starts
+inline constexpr double MAX_PX_S  = 9000.0; // release-spike clamp
+inline constexpr double FRICTION  = 5.0; // exponential drain per second
+inline constexpr double STOP_PX_S = 80.0; // below: stop dead
+inline constexpr double WINDOW_S  = 0.1; // trailing slope window
+inline constexpr int    SAMPLES   = 8; // ring size per tracker
+
+// Cumulative finger travel + trailing ring. Push once per motion event,
+// slope() once per release; reset() when a new press takes over.
+struct STracker {
+    double t[SAMPLES] = {};
+    double y[SAMPLES] = {};
+    int    count      = 0;
+    double cum        = 0.0;
+
+    void push(double now, double dy) {
+        cum += dy;
+        const int i = count % SAMPLES;
+        t[i]        = now;
+        y[i]        = cum;
+        ++count;
+    }
+
+    void reset() {
+        count = 0;
+        cum   = 0.0;
+    }
+
+    double slope(double now) const {
+        const int total = std::min(count, SAMPLES);
+        std::vector<SSample> ordered;
+        ordered.reserve((size_t)std::max(0, total));
+        for (int k = count - total; k < count; ++k)
+            ordered.push_back({t[k % SAMPLES], y[k % SAMPLES]});
+        return releaseSlope(ordered, now, WINDOW_S);
+    }
+};
+
+// Finger-space px/s -> scroll-space velocity (content moves against the
+// finger); 0 when below the start threshold.
+inline double startVelocity(double fingerVel) {
+    if (std::abs(fingerVel) < MIN_PX_S)
+        return 0.0;
+    return std::clamp(-fingerVel, -MAX_PX_S, MAX_PX_S);
+}
+
+// One exponential drain step; 0 once below the stop threshold.
+inline double drain(double vel, double dt) {
+    vel *= std::exp(-FRICTION * dt);
+    return std::abs(vel) < STOP_PX_S ? 0.0 : vel;
+}
 
 } // namespace Fling
 

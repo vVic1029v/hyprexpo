@@ -103,14 +103,8 @@ constexpr double RECENT_PAD_PX = 20.0;
 // a finger release); anything shorter springs back on idle instead of
 // toggling on a small flick.
 constexpr double COMMIT_OVERSHOOT_PX = 24.0;
-// Touch fling tuning: release slope is measured over this trailing window
-// (never from a single instant delta); inertia below MIN never starts,
-// friction drains exponentially, STOP ends it.
-constexpr double VEL_WINDOW_S    = 0.1;
-constexpr double MIN_FLING_PX_S  = 350.0;
-constexpr double MAX_FLING_PX_S  = 9000.0;
-constexpr double FLING_FRICTION  = 5.0;
-constexpr double FLING_STOP_PX_S = 80.0;
+// Touch fling tuning lives shared in Hyprexpo::Fling (same physics as the
+// ribbon strip).
 
 double smooth01(double t) {
     t = std::clamp(t, 0.0, 1.0);
@@ -833,9 +827,7 @@ void CDrawerAddon::stepFrame() {
             if (state.scroll <= 0.0 || state.scroll >= max) {
                 state.flingVel = 0.0; // hit an end: stop dead, no bounce
             } else {
-                state.flingVel *= std::exp(-FLING_FRICTION * dt);
-                if (std::abs(state.flingVel) < FLING_STOP_PX_S)
-                    state.flingVel = 0.0;
+                state.flingVel = Hyprexpo::Fling::drain(state.flingVel, dt);
             }
         } else {
             state.flingVel = 0.0;
@@ -1051,20 +1043,14 @@ void CDrawerAddon::updateHover(const Vector2D& local) {
 void CDrawerAddon::touchDown(const Vector2D&) {
     state.touchDownActive = true;
     state.flingVel       = 0.0; // finger grabs the list: inertia stops
-    state.velCount       = 0;
-    state.velCumY        = 0.0;
+    state.velTrack.reset();
     beginPull(); // latch is scroll position; the touch point is irrelevant
 }
 
 void CDrawerAddon::touchMotion(double dy, double pressDist) {
     dragAdvance(dy);
     // Velocity cache: cumulative finger travel stamped per motion event.
-    const double now = pullStamp();
-    state.velCumY += dy;
-    const int i    = state.velCount % State::VEL_SAMPLES;
-    state.velT[i]  = now;
-    state.velY[i]  = state.velCumY;
-    ++state.velCount;
+    state.velTrack.push(pullStamp(), dy);
     if (pressDist >= Hyprexpo::Addon::TAP_SLOP_PX) {
         // Scrolling, not pressing: the highlight must not chase the
         // finger. A resting finger (inside slop) keeps the pressed-app
@@ -1077,25 +1063,15 @@ void CDrawerAddon::touchMotion(double dy, double pressDist) {
 }
 
 double CDrawerAddon::releaseVelocity(double now) {
-    // Materialize the ring oldest-first for the pure slope; a handful of
-    // samples once per release, no steady-state allocation.
-    const int total = std::min(state.velCount, State::VEL_SAMPLES);
-    std::vector<Hyprexpo::Fling::SSample> ordered;
-    ordered.reserve((size_t)std::max(0, total));
-    for (int k = state.velCount - total; k < state.velCount; ++k)
-        ordered.push_back({state.velT[k % State::VEL_SAMPLES], state.velY[k % State::VEL_SAMPLES]});
-    return Hyprexpo::Fling::releaseSlope(ordered, now, VEL_WINDOW_S);
+    return state.velTrack.slope(now);
 }
 
 void CDrawerAddon::maybeStartFling() {
     state.flingVel = 0.0;
     if (!state.fitted || state.pullVisual != 0.0)
         return;
-    const double fingerVel = releaseVelocity(pullStamp());
-    double       scrollVel = -fingerVel; // list moves against the finger
-    if (std::abs(scrollVel) < MIN_FLING_PX_S)
-        return;
-    state.flingVel = std::clamp(scrollVel, -MAX_FLING_PX_S, MAX_FLING_PX_S);
+    // Shared physics: threshold, clamp, and against-the-finger sign in one.
+    state.flingVel = Hyprexpo::Fling::startVelocity(releaseVelocity(pullStamp()));
 }
 
 void CDrawerAddon::touchUp(const Vector2D& upLocal, const Vector2D& pressDelta) {
