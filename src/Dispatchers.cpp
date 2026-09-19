@@ -491,6 +491,137 @@ static int luaDrawer(lua_State* L) {
     return luaDispatchResult(L, "hyprexpo.drawer", onDrawerDispatcher(luaStringArg(L, 1, "hyprexpo.drawer", "toggle")));
 }
 
+// Phase 2 touch primitives: thin guards around COverview methods (which do
+// the real work and all null/closing checks). Naming: hyprexpo.<verb> with
+// global compositor px, mirroring the faucet event fields.
+static COverview* luaOverview() {
+    return dynamic_cast<COverview*>(activeOverview());
+}
+
+static int luaRegionAt(lua_State* L) {
+    const double x = luaL_checknumber(L, 1);
+    const double y = luaL_checknumber(L, 2);
+    std::string  region;
+    if (auto* const OV = luaOverview())
+        region = OV->regionNameAt(x, y);
+    lua_pushstring(L, region.c_str());
+    return 1;
+}
+
+static int luaHoverAt(lua_State* L) {
+    const double x = luaL_checknumber(L, 1);
+    const double y = luaL_checknumber(L, 2);
+    if (auto* const OV = luaOverview())
+        OV->hoverAt(x, y);
+    return 0;
+}
+
+static int luaTapSelect(lua_State* L) {
+    const double x   = luaL_checknumber(L, 1);
+    const double y   = luaL_checknumber(L, 2);
+    bool         ok  = false;
+    if (auto* const OV = luaOverview())
+        ok = OV->tapSelectAt(x, y);
+    lua_pushboolean(L, ok ? 1 : 0);
+    return 1;
+}
+
+static int luaRibbonPan(lua_State* L) {
+    const double dx = luaL_checknumber(L, 1);
+    if (auto* const OV = luaOverview())
+        OV->ribbonPanBy(dx);
+    return 0;
+}
+
+static int luaDragBegin(lua_State* L) {
+    const double x  = luaL_checknumber(L, 1);
+    const double y  = luaL_checknumber(L, 2);
+    bool         ok = false;
+    if (auto* const OV = luaOverview())
+        ok = OV->dragBeginAt(x, y);
+    lua_pushboolean(L, ok ? 1 : 0);
+    return 1;
+}
+
+static int luaDragUpdate(lua_State* L) {
+    const double x = luaL_checknumber(L, 1);
+    const double y = luaL_checknumber(L, 2);
+    if (auto* const OV = luaOverview())
+        OV->dragUpdateAt(Vector2D{x, y});
+    return 0;
+}
+
+static int luaDragEnd(lua_State* L) {
+    (void)L;
+    bool ok = false;
+    if (auto* const OV = luaOverview())
+        ok = OV->dragEndTouch();
+    lua_pushboolean(L, ok ? 1 : 0);
+    return 1;
+}
+
+static int luaDragCancel(lua_State* L) {
+    (void)L;
+    if (auto* const OV = luaOverview())
+        OV->dragCancelTouch();
+    return 0;
+}
+
+static int luaDrawerDown(lua_State* L) {
+    const double x = luaL_checknumber(L, 1);
+    const double y = luaL_checknumber(L, 2);
+    if (auto* const OV = luaOverview())
+        OV->drawerDownAt(x, y);
+    return 0;
+}
+
+static int luaDrawerMotion(lua_State* L) {
+    const double dy   = luaL_checknumber(L, 1);
+    const double dist = luaL_checknumber(L, 2);
+    if (auto* const OV = luaOverview())
+        OV->drawerMotionBy(dy, dist);
+    return 0;
+}
+
+static int luaDrawerUp(lua_State* L) {
+    const double x   = luaL_checknumber(L, 1);
+    const double y   = luaL_checknumber(L, 2);
+    const double dx  = luaL_checknumber(L, 3);
+    const double dy  = luaL_checknumber(L, 4);
+    if (auto* const OV = luaOverview())
+        OV->drawerUpAt(x, y, dx, dy);
+    return 0;
+}
+
+static int luaDrawerCancel(lua_State* L) {
+    (void)L;
+    if (auto* const OV = luaOverview())
+        OV->drawerCancelTouch();
+    return 0;
+}
+
+static int luaRibbonRelease(lua_State* L) {
+    (void)L;
+    if (auto* const OV = luaOverview())
+        OV->ribbonReleaseTouch();
+    return 0;
+}
+
+static int luaFocusSearch(lua_State* L) {
+    (void)L;
+    if (auto* const OV = luaOverview())
+        OV->focusSearchBox();
+    return 0;
+}
+
+static int luaFocusAt(lua_State* L) {
+    const double x = luaL_checknumber(L, 1);
+    const double y = luaL_checknumber(L, 2);
+    if (auto* const OV = luaOverview())
+        OV->focusAt(x, y);
+    return 0;
+}
+
 static int luaKbFocus(lua_State* L) {
     return luaDispatchResult(L, "hyprexpo.kb_focus", onKbFocusDispatcher(luaStringArg(L, 1, "hyprexpo.kb_focus")));
 }
@@ -853,6 +984,21 @@ void registerHyprexpoDispatchers() {
     HyprlandAPI::addLuaFunction(PHANDLE, "hyprexpo", "kb_select", luaKbSelectToken);
     HyprlandAPI::addLuaFunction(PHANDLE, "hyprexpo", "kb_selecti", luaKbSelectIndex);
     HyprlandAPI::addLuaFunction(PHANDLE, "hyprexpo", "gesture", luaGesture);
+    HyprlandAPI::addLuaFunction(PHANDLE, "hyprexpo", "region_at", luaRegionAt);
+    HyprlandAPI::addLuaFunction(PHANDLE, "hyprexpo", "hover_at", luaHoverAt);
+    HyprlandAPI::addLuaFunction(PHANDLE, "hyprexpo", "tap_select", luaTapSelect);
+    HyprlandAPI::addLuaFunction(PHANDLE, "hyprexpo", "ribbon_pan", luaRibbonPan);
+    HyprlandAPI::addLuaFunction(PHANDLE, "hyprexpo", "drag_begin", luaDragBegin);
+    HyprlandAPI::addLuaFunction(PHANDLE, "hyprexpo", "drag_update", luaDragUpdate);
+    HyprlandAPI::addLuaFunction(PHANDLE, "hyprexpo", "drag_end", luaDragEnd);
+    HyprlandAPI::addLuaFunction(PHANDLE, "hyprexpo", "drag_cancel", luaDragCancel);
+    HyprlandAPI::addLuaFunction(PHANDLE, "hyprexpo", "drawer_down", luaDrawerDown);
+    HyprlandAPI::addLuaFunction(PHANDLE, "hyprexpo", "drawer_motion", luaDrawerMotion);
+    HyprlandAPI::addLuaFunction(PHANDLE, "hyprexpo", "drawer_up", luaDrawerUp);
+    HyprlandAPI::addLuaFunction(PHANDLE, "hyprexpo", "drawer_cancel", luaDrawerCancel);
+    HyprlandAPI::addLuaFunction(PHANDLE, "hyprexpo", "ribbon_release", luaRibbonRelease);
+    HyprlandAPI::addLuaFunction(PHANDLE, "hyprexpo", "focus_search", luaFocusSearch);
+    HyprlandAPI::addLuaFunction(PHANDLE, "hyprexpo", "focus_at", luaFocusAt);
     HyprlandAPI::addLuaFunction(PHANDLE, "hyprexpo", "on", Hyprexpo::LuaEvents::luaOn);
     HyprlandAPI::addLuaFunction(PHANDLE, "hyprexpo", "consume", Hyprexpo::LuaEvents::luaConsume);
 }
