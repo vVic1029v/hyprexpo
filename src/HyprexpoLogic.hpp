@@ -311,6 +311,14 @@ inline double startVelocity(double fingerVel) {
     return std::clamp(-fingerVel, -MAX_PX_S, MAX_PX_S);
 }
 
+// Already scroll-space px/s -> velocity (same threshold and clamp, no
+// sign flip): for paths that tracked scroll-space travel directly.
+inline double startVelocityDirect(double scrollVel) {
+    if (std::abs(scrollVel) < MIN_PX_S)
+        return 0.0;
+    return std::clamp(scrollVel, -MAX_PX_S, MAX_PX_S);
+}
+
 // One exponential drain step; 0 once below the stop threshold.
 inline double drain(double vel, double dt) {
     vel *= std::exp(-FRICTION * dt);

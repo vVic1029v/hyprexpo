@@ -211,7 +211,9 @@ class COverview final : public IOverviewSession {
     double                       ribbonScrollX = 0.0; // horizontal pan offset px
     double                       ribbonVel     = 0.0; // strip inertia, same physics as the drawer list
     double                       ribbonLastStepS = 0.0;
-    Hyprexpo::Fling::STracker    ribbonTrack; // finger travel samples for release slope
+    Hyprexpo::Fling::STracker    ribbonTrack; // touch finger travel (finger-space) for release slope
+    Hyprexpo::Fling::STracker    wheelTrack; // touchpad + mouse-drag travel (scroll-space) for release slope
+    double                       wheelS = 0.0; // last touchpad ribbon event (idle = release)
 
     int                          openedID  = -1;
     int                          closeOnID = -1;
