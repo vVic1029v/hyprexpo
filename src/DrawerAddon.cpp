@@ -3,16 +3,20 @@
 // pure model bits (scan/filter/locale/icons) live in Drawer.{hpp,cpp} with
 // no compositor dependency.
 #include "DrawerAddon.hpp"
+#include "FlingConfig.hpp"
+#include "HyprlandConfigCompat.hpp"
 #include "HyprexpoConfig.hpp"
 #include "Overview.hpp"
 #include "OverviewInternal.hpp"
 #include "ConfigValues.hpp"
 #include "Drawer.hpp"
+#include "RenderUtil.hpp"
 
 #include <hyprland/src/Compositor.hpp>
 #include <hyprland/src/config/ConfigValue.hpp>
 #include <hyprland/src/config/shared/actions/ConfigActions.hpp>
 #include <hyprland/src/config/values/types/IntValue.hpp>
+#include <hyprland/src/config/values/types/ColorValue.hpp>
 #include <hyprland/src/config/values/types/FloatValue.hpp>
 #include <hyprland/src/debug/log/Logger.hpp>
 #include <hyprland/src/devices/IKeyboard.hpp>
@@ -94,6 +98,18 @@ int drawerCfgIconPx() {
 float drawerCfgResist() {
     return std::clamp(getFloat("plugin:hyprexpo:drawer_resist", 0.25F), 0.0F, 1.0F);
 }
+uint64_t drawerCfgBgCol() {
+    // INTEGER-storing CColorValue through the compat shim: the shim copies
+    // the live value into compat.integer and hands out a stable pointer to
+    // it (see getConfigValue above). Missing key -> intDefault fallback.
+    static auto* compat = CompatHyprlandAPI::getConfigValue(PHANDLE, "plugin:hyprexpo:drawer_bg_col");
+    if (!compat || !compat->ptr)
+        return HyprexpoConfig::DRAWER_BG_COL_DEFAULT;
+    const auto* ptr = reinterpret_cast<Config::INTEGER* const*>(compat->ptr);
+    if (!ptr || !*ptr)
+        return HyprexpoConfig::DRAWER_BG_COL_DEFAULT;
+    return (uint64_t)(uint32_t)**ptr;
+}
 // Rubber-band overshoot cap for deep (non-closing) pulls.
 constexpr double RESIST_CAP_PX = 28.0;
 // Breathing room between the recent row and the locked grid below it.
@@ -110,10 +126,6 @@ constexpr double COMMIT_OVERSHOOT_PX = 24.0;
 double smooth01(double t) {
     t = std::clamp(t, 0.0, 1.0);
     return t * t * (3.0 - 2.0 * t);
-}
-
-SP<Render::ITexture> uploadCairoSurface(cairo_surface_t* surf) {
-    return g_pHyprRenderer->createTexture(surf);
 }
 
 } // namespace
@@ -550,11 +562,12 @@ void CDrawerAddon::endDrag(bool commit) {
     const double span      = pullSpan();
     if (commit && state.pullEngaged && span > 0.0) {
         const double flick = releaseVelocity(pullStamp());
-        if (!state.fitted && -state.pullVisual + std::max(0.0, -flick) * Hyprexpo::Fling::COMMIT_PROJECTION_S >= threshold) {
+        const double proj  = (double)Hyprexpo::FlingConfig::commitProjectionS();
+        if (!state.fitted && -state.pullVisual + std::max(0.0, -flick) * proj >= threshold) {
             commitPull(true, span);
             return;
         }
-        if (state.fitted && state.pullVisual + std::max(0.0, flick) * Hyprexpo::Fling::COMMIT_PROJECTION_S >= threshold) {
+        if (state.fitted && state.pullVisual + std::max(0.0, flick) * proj >= threshold) {
             commitPull(false, span);
             return;
         }
@@ -738,7 +751,7 @@ SP<Render::ITexture> renderSvgIcon(const std::string& path, int target) {
         cairo_destroy(cr);
         if (ok) {
             cairo_surface_flush(surf);
-            tex = uploadCairoSurface(surf);
+            tex = Hyprexpo::RenderUtil::uploadCairoSurface(surf);
         }
     }
     cairo_surface_destroy(surf);
@@ -762,29 +775,11 @@ SP<Render::ITexture> CDrawerAddon::iconTexture(const Hyprexpo::Drawer::SApp& app
         if (err)
             g_error_free(err);
         if (pb) {
-            const int w = gdk_pixbuf_get_width(pb);
-            const int h = gdk_pixbuf_get_height(pb);
-            cairo_surface_t* surf = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, w, h);
-            unsigned char* dst = cairo_image_surface_get_data(surf);
-            const int dstStride = cairo_image_surface_get_stride(surf);
-            guchar* src = gdk_pixbuf_get_pixels(pb);
-            const int srcStride = gdk_pixbuf_get_rowstride(pb);
-            const int ch = gdk_pixbuf_get_n_channels(pb);
-            const bool hasA = gdk_pixbuf_get_has_alpha(pb);
-            for (int y = 0; y < h; ++y) {
-                uint32_t* row = (uint32_t*)(dst + y * dstStride);
-                for (int x = 0; x < w; ++x) {
-                    const guchar* p = src + y * srcStride + x * ch;
-                    const uint32_t a = hasA ? p[3] : 255;
-                    const uint32_t r = p[0] * a / 255;
-                    const uint32_t g = (ch > 1 ? p[1] : p[0]) * a / 255;
-                    const uint32_t b = (ch > 2 ? p[2] : p[0]) * a / 255;
-                    row[x] = (a << 24) | (r << 16) | (g << 8) | b;
-                }
+            cairo_surface_t* surf = Hyprexpo::RenderUtil::surfaceFromPixbuf(pb);
+            if (surf) {
+                tex = Hyprexpo::RenderUtil::uploadCairoSurface(surf);
+                cairo_surface_destroy(surf);
             }
-            cairo_surface_mark_dirty(surf);
-            tex = uploadCairoSurface(surf);
-            cairo_surface_destroy(surf);
             g_object_unref(pb);
         }
     }
@@ -869,7 +864,8 @@ void CDrawerAddon::stepFrame() {
             if (state.scroll <= 0.0 || state.scroll >= max) {
                 state.flingVel = 0.0; // hit an end: stop dead, no bounce
             } else {
-                state.flingVel = Hyprexpo::Fling::drain(state.flingVel, dt);
+                state.flingVel = Hyprexpo::Fling::drain(state.flingVel, dt, (double)Hyprexpo::FlingConfig::friction(),
+                                                       (double)Hyprexpo::FlingConfig::stopPxS());
             }
         } else {
             state.flingVel = 0.0;
@@ -904,7 +900,7 @@ void CDrawerAddon::renderPass() {
         const double H = MON->m_size.y;
         if (sTop < H) {
             CBox plate = toPhys(CBox{{0.0, sTop}, {W, H - sTop}});
-            Render::GL::g_pHyprOpenGL->renderRect(plate, CHyprColor{0xff0a0a0a}, {});
+            Render::GL::g_pHyprOpenGL->renderRect(plate, CHyprColor{drawerCfgBgCol()}, {});
         }
     }
 
@@ -960,7 +956,7 @@ void CDrawerAddon::renderPass() {
         const double ext = (rowH() + 16.0) * smooth01(state.anim);
         if (ext > 0.0) {
             CBox shade = toPhys(CBox{{0.0, sTop + sH - ext}, {W, ext}});
-            Render::GL::g_pHyprOpenGL->renderRect(shade, CHyprColor{0xff0a0a0a}, {});
+            Render::GL::g_pHyprOpenGL->renderRect(shade, CHyprColor{drawerCfgBgCol()}, {});
         }
     }
 
@@ -969,7 +965,7 @@ void CDrawerAddon::renderPass() {
     // ring would sit there permanently instead of giving feedback.
     {
         CBox well = toPhys(CBox{{48.0, sTop}, {W - 96.0, sH}});
-        Render::GL::g_pHyprOpenGL->renderRect(well, CHyprColor{0xff0a0a0a}, {.round = 10});
+        Render::GL::g_pHyprOpenGL->renderRect(well, CHyprColor{drawerCfgBgCol()}, {.round = 10});
         if (state.queryDirty || !state.searchTex) {
             const std::string text = state.query.empty() ? "Search apps…" : state.query;
             const CHyprColor col = state.query.empty() ? CHyprColor{0xff787c99} : CHyprColor{0xffa9b1d6};
@@ -1107,7 +1103,7 @@ void CDrawerAddon::touchMotion(double dy, double pressDist) {
 }
 
 double CDrawerAddon::releaseVelocity(double now) {
-    return state.velTrack.slope(now);
+    return state.velTrack.slope(now, (double)Hyprexpo::FlingConfig::windowS());
 }
 
 void CDrawerAddon::maybeStartFling() {
@@ -1115,7 +1111,8 @@ void CDrawerAddon::maybeStartFling() {
     if (!state.fitted || state.pullVisual != 0.0)
         return;
     // Shared physics: threshold, clamp, and against-the-finger sign in one.
-    state.flingVel = Hyprexpo::Fling::startVelocity(releaseVelocity(pullStamp()));
+    state.flingVel = Hyprexpo::Fling::startVelocity(releaseVelocity(pullStamp()), (double)Hyprexpo::FlingConfig::minPxS(),
+                                                   (double)Hyprexpo::FlingConfig::maxPxS());
 }
 
 void CDrawerAddon::touchUp(const Vector2D& upLocal, const Vector2D& pressDelta) {
@@ -1168,4 +1165,6 @@ void CDrawerAddon::registerConfig() {
     HyprlandAPI::addConfigValueV2(PHANDLE, makeShared<Config::Values::CIntValue>("plugin:hyprexpo:drawer_icon_px", "app icon px", HyprexpoConfig::DRAWER_ICON_PX_DEFAULT));
     HyprlandAPI::addConfigValueV2(PHANDLE, makeShared<Config::Values::CFloatValue>("plugin:hyprexpo:drawer_resist", "rubber-band factor for deep drawer pulls (0-1)",
                                                            HyprexpoConfig::DRAWER_RESIST_DEFAULT));
+    HyprlandAPI::addConfigValueV2(PHANDLE, makeShared<Config::Values::CColorValue>("plugin:hyprexpo:drawer_bg_col", "drawer sheet background color",
+                                                           HyprexpoConfig::DRAWER_BG_COL_DEFAULT));
 }

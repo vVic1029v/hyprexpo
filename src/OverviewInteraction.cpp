@@ -1,4 +1,5 @@
 #include "HyprlandConfigCompat.hpp"
+#include "FlingConfig.hpp"
 #define HyprlandAPI CompatHyprlandAPI
 #include "OverviewInternal.hpp"
 #include "HyprexpoLogic.hpp"
@@ -140,9 +141,28 @@ void COverview::ribbonReleaseTouch() {
     // same threshold/clamp/drain as every other flinger.
     if (closing)
         return;
+    gestureRelease();
+}
+
+void COverview::gestureBegin() {
+    // Live-gesture start: fresh input takes over (mirrors the axis hook).
+    if (closing)
+        return;
+    ribbonVel     = 0.0;
+    ribbonTargetX = -1.0;
+}
+
+void COverview::gestureRelease() {
+    // Live-gesture end (trackpad) or plain touch release: coasts from the
+    // shared wheel tracker, same physics. No-op when nothing was tracked.
+    if (closing)
+        return;
     const double now = std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
-    ribbonVel        = Hyprexpo::Fling::startVelocityDirect(ribbonTrack.slope(now));
+    ribbonVel        = Hyprexpo::Fling::startVelocityDirect(wheelTrack.slope(now, (double)Hyprexpo::FlingConfig::windowS()),
+                                                           (double)Hyprexpo::FlingConfig::minPxS(), (double)Hyprexpo::FlingConfig::maxPxS());
     ribbonTargetX    = -1.0;
+    wheelS           = 0.0;
+    wheelTrack.reset();
     if (ribbonVel != 0.0)
         damage();
 }
@@ -675,7 +695,9 @@ void COverview::touchPressUp(int32_t touchID) {
         // Tracked scroll-space, so no sign flip: fingers fling right, the
         // strip coasts right.
         const double now = std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
-        OWNER->ribbonVel = Hyprexpo::Fling::startVelocityDirect(OWNER->ribbonTrack.slope(now));
+        OWNER->ribbonVel = Hyprexpo::Fling::startVelocityDirect(OWNER->ribbonTrack.slope(now, (double)Hyprexpo::FlingConfig::windowS()),
+                                                               (double)Hyprexpo::FlingConfig::minPxS(),
+                                                               (double)Hyprexpo::FlingConfig::maxPxS());
         if (OWNER->ribbonVel != 0.0)
             OWNER->damage();
         return; // release commits nothing else, never selects

@@ -1,4 +1,5 @@
 #include "Overview.hpp"
+#include "FlingConfig.hpp"
 #include "LuaEvents.hpp"
 #include <any>
 #include <map>
@@ -132,6 +133,8 @@ static Config::FLOAT floatDefault(const std::string& name) {
 
 static Config::INTEGER intDefault(const std::string& name) {
     static const std::map<std::string, Config::INTEGER> DEFAULTS = {
+        {"plugin:hyprexpo:drawer_bg_col", (Config::INTEGER)HyprexpoConfig::DRAWER_BG_COL_DEFAULT},
+        {"plugin:hyprexpo:expose_bg_tint_col", (Config::INTEGER)HyprexpoConfig::EXPOSE_BG_TINT_COL_DEFAULT},
         {"plugin:hyprexpo:columns", HyprexpoConfig::COLUMNS_DEFAULT},
         {"plugin:hyprexpo:rows", HyprexpoConfig::ROWS_DEFAULT},
         {"plugin:hyprexpo:gaps_in", HyprexpoConfig::GAPS_IN_DEFAULT},
@@ -1105,6 +1108,20 @@ void COverview::ribbonPanBy(double fingerDx) {
     ribbonScrollBy(-fingerDx);
 }
 
+// Live trackpad gesture (hl.gesture start/update/finish tables): the update
+// deltas already speak scroll-space (right-positive, like axis events), so
+// this mirrors the axis-hook body exactly — fresh input stops coasting,
+// samples feed the shared release fling, motion pans the strip.
+void COverview::ribbonScrollFromGesture(double dx) {
+    if (closing)
+        return;
+    ribbonVel = 0.0;
+    const double now = std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
+    wheelTrack.push(now, dx);
+    wheelS = now;
+    ribbonScrollBy(dx);
+}
+
 namespace {
 // /tmp/touchpad-fingers, maintained by touch/fingers-watch.py: "1" while any
 // finger touches the pad, "0" when all lifted. Missing or stale (>2s) file
@@ -1161,7 +1178,8 @@ void COverview::stepRibbon() {
         // Frames are sustained until the eval window lapses — without this
         // the pump dies with the burst and the idle eval never runs.
         if (!closing && !drawer.hidesRibbon() && wheelS > 0.0 && now - wheelS > 0.05 && now - wheelS < 0.5) {
-            ribbonVel = Hyprexpo::Fling::startVelocityDirect(wheelTrack.slope(now));
+            ribbonVel = Hyprexpo::Fling::startVelocityDirect(wheelTrack.slope(now, (double)Hyprexpo::FlingConfig::windowS()),
+                                                            (double)Hyprexpo::FlingConfig::minPxS(), (double)Hyprexpo::FlingConfig::maxPxS());
             if (ribbonVel != 0.0 && !touchpadFingersUp()) {
                 // Fingers never left: a pause mid-gesture, not a release.
                 // Swallow it (consumed, no refire) instead of flinging.
@@ -1185,7 +1203,7 @@ void COverview::stepRibbon() {
     if (ribbonScrollX <= 0.0 || ribbonScrollX >= max)
         ribbonVel = 0.0; // hit an end: stop dead, no bounce
     else
-        ribbonVel = Hyprexpo::Fling::drain(ribbonVel, dt);
+        ribbonVel = Hyprexpo::Fling::drain(ribbonVel, dt, (double)Hyprexpo::FlingConfig::friction(), (double)Hyprexpo::FlingConfig::stopPxS());
     damage();
 }
 
@@ -1610,7 +1628,8 @@ COverview::COverview(PHLWORKSPACE startedOn_, PHLMONITOR monitor_, bool swipe_, 
         if (TARGET && TARGET->ribbonMousePan) {
             TARGET->ribbonMousePan = false;
             const double nowUp      = std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
-            TARGET->ribbonVel       = Hyprexpo::Fling::startVelocityDirect(TARGET->wheelTrack.slope(nowUp));
+            TARGET->ribbonVel       = Hyprexpo::Fling::startVelocityDirect(TARGET->wheelTrack.slope(nowUp, (double)Hyprexpo::FlingConfig::windowS()),
+                                                                         (double)Hyprexpo::FlingConfig::minPxS(), (double)Hyprexpo::FlingConfig::maxPxS());
             TARGET->wheelTrack.reset();
             TARGET->wheelS = 0.0;
             if (TARGET->ribbonVel != 0.0)

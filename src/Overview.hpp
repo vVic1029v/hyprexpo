@@ -81,6 +81,8 @@ class COverview final : public IOverviewSession {
     void          drawerUpAt(double gx, double gy, double ddx, double ddy);
     void          drawerCancelTouch();
     void          ribbonReleaseTouch();
+    void          gestureBegin();
+    void          gestureRelease();
     void          focusSearchBox();
     void          focusAt(double gx, double gy);
 
@@ -172,6 +174,7 @@ class COverview final : public IOverviewSession {
     double     ribbonMaxScroll() const; // pan range px (0 when the strip fits)
     void       ribbonScrollBy(double deltaPx); // wheel: content moves against delta
     void       ribbonPanBy(double fingerDx);   // touch: content follows the finger
+    void       ribbonScrollFromGesture(double dx); // live trackpad gesture: scroll-space, feeds fling
     void       stepRibbon();                   // per-frame strip inertia (shared fling physics)
     void       ribbonScrollToWorkspace(int wsid); // center the tile (open-time)
 
@@ -276,6 +279,9 @@ class COverview final : public IOverviewSession {
     bool                         showWorkspaceNames = false;
     bool                         animateEntry = false;
     bool                         wallpaperBg = false;
+    // Expose backdrop picture (cover-fit, cached by path) + tint over it.
+    SP<Render::ITexture>         bgPictureTex;
+    std::string                  bgPicturePath;
     std::chrono::steady_clock::time_point createdAt;
 
     friend class COverviewPassElement;

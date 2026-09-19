@@ -1,9 +1,12 @@
 #include "HyprlandConfigCompat.hpp"
 #define HyprlandAPI CompatHyprlandAPI
+#include "ConfigValues.hpp"
+#include "HyprexpoConfig.hpp"
 #include "OverviewInternal.hpp"
 #include "OverviewCapture.hpp"
 #include "HyprexpoLogic.hpp"
 #include "OverviewPassElement.hpp"
+#include "RenderUtil.hpp"
 #define private   public
 #define protected public
 #include <hyprland/src/Compositor.hpp>
@@ -275,7 +278,68 @@ void COverview::fullRender() {
     const auto SHAPE   = currentGridShape();
 
     clearWithColor(BG_COLOR); // alpha honored: transparent bg_col shows the desktop through
-    if (wallpaperBg && MON->m_background) {
+    // Expose backdrop: configured picture (cover-fit, cached by path) or
+    // the monitor wallpaper, then the configured tint layer over it.
+    {
+        static auto* compat = HyprlandAPI::getConfigValue(PHANDLE, "plugin:hyprexpo:expose_bg_tint_col");
+        std::string        picture = Hyprexpo::ConfigValues::getString("plugin:hyprexpo:expose_bg_picture", "");
+        CRegion            backgroundDamage{0, 0, INT16_MAX, INT16_MAX};
+        CBox               backgroundBox{{0, 0}, MON->m_transformedSize};
+        bool               drewPicture = false;
+        if (!picture.empty()) {
+            if (picture != bgPicturePath || !bgPictureTex) {
+                bgPicturePath.clear();
+                bgPictureTex.reset();
+                GError*   err = nullptr;
+                GdkPixbuf* pb = gdk_pixbuf_new_from_file(picture.c_str(), &err);
+                if (err)
+                    g_error_free(err);
+                if (pb) {
+                    cairo_surface_t* surf = Hyprexpo::RenderUtil::surfaceFromPixbuf(pb);
+                    if (surf) {
+                        bgPictureTex = Hyprexpo::RenderUtil::uploadCairoSurface(surf);
+                        cairo_surface_destroy(surf);
+                        if (bgPictureTex)
+                            bgPicturePath = picture;
+                    }
+                    g_object_unref(pb);
+                }
+            }
+            if (bgPictureTex) {
+                // Cover-fit: an oversized centered box (superset at the
+                // picture's aspect) drawn with the same whole texture the
+                // icons pipeline produces; overflow past the output clips in
+                // the render pass. No pixel copies, hot-path is one branch.
+                const Vector2D texSize = bgPictureTex->m_size;
+                if (texSize.x > 0 && texSize.y > 0) {
+                    const double texAspect = texSize.x / texSize.y;
+                    const double outAspect = (double)MON->m_transformedSize.x / (double)MON->m_transformedSize.y;
+                    const double bw = backgroundBox.w, bh = backgroundBox.h;
+                    const double bx = backgroundBox.x, by = backgroundBox.y;
+                    const double coverW = (texAspect > outAspect) ? bw * (texAspect / outAspect) : bw;
+                    const double coverH = (texAspect > outAspect) ? bh : bh * (outAspect / texAspect);
+                    Render::GL::g_pHyprOpenGL->renderTextureInternal(
+                        bgPictureTex, CBox{bx - (coverW - bw) / 2.0, by - (coverH - bh) / 2.0, coverW, coverH},
+                        {.damage = &backgroundDamage, .a = 1.0f});
+                    drewPicture = true;
+                }
+            }
+        }
+        if (!drewPicture && wallpaperBg && MON->m_background) {
+            Render::GL::g_pHyprOpenGL->renderTextureInternal(MON->m_background, backgroundBox, {.damage = &backgroundDamage, .a = 1.0f});
+            drewPicture = true;
+        }
+        if (drewPicture) {
+            uint64_t tint = HyprexpoConfig::EXPOSE_BG_TINT_COL_DEFAULT;
+            if (compat && compat->ptr) {
+                const auto* ptr = reinterpret_cast<Config::INTEGER* const*>(compat->ptr);
+                if (ptr && *ptr)
+                    tint = (uint64_t)(uint32_t)**ptr;
+            }
+            Render::GL::g_pHyprOpenGL->renderRect(backgroundBox, CHyprColor{tint}, {});
+        }
+    }
+    if (false && wallpaperBg && MON->m_background) {
         CRegion backgroundDamage{0, 0, INT16_MAX, INT16_MAX};
         CBox    backgroundBox{{0, 0}, MON->m_transformedSize};
         Render::GL::g_pHyprOpenGL->renderTextureInternal(MON->m_background, backgroundBox, {.damage = &backgroundDamage, .a = 1.0f});

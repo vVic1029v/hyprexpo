@@ -114,4 +114,13 @@ inline constexpr float       RIBBON_SCALE_DEFAULT            = 1.5F;
 inline constexpr float       DRAWER_RESIST_DEFAULT           = 0.25F;
 inline constexpr float       WHEEL_SCROLL_SCALE_DEFAULT      = 6.0F;
 inline constexpr float       TOUCHPAD_SCROLL_SCALE_DEFAULT   = 2.5F;
+inline constexpr float       FLING_MIN_PX_S_DEFAULT          = 350.0F;
+inline constexpr float       FLING_MAX_PX_S_DEFAULT          = 9000.0F;
+inline constexpr float       FLING_FRICTION_DEFAULT          = 5.0F;
+inline constexpr float       FLING_STOP_PX_S_DEFAULT         = 80.0F;
+inline constexpr float       FLING_WINDOW_S_DEFAULT          = 0.1F;
+inline constexpr float       FLING_COMMIT_PROJECTION_S_DEFAULT = 0.25F;
+inline constexpr unsigned    DRAWER_BG_COL_DEFAULT           = 0xff0a0a0a;
+inline constexpr const char* EXPOSE_BG_PICTURE_DEFAULT       = "";
+inline constexpr unsigned    EXPOSE_BG_TINT_COL_DEFAULT      = 0x66000000;
 }

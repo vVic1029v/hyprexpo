@@ -309,31 +309,32 @@ struct STracker {
         return out;
     }
 
-    double slope(double now) const {
-        return releaseSlope(ordered(), now, WINDOW_S);
+    double slope(double now, double windowS = WINDOW_S) const {
+        return releaseSlope(ordered(), now, windowS);
     }
 };
 
 // Finger-space px/s -> scroll-space velocity (content moves against the
-// finger); 0 when below the start threshold.
-inline double startVelocity(double fingerVel) {
-    if (std::abs(fingerVel) < MIN_PX_S)
+// finger); 0 when below the start threshold. Threshold/clamp overridable
+// (live config); defaults keep unit tests and fallbacks identical.
+inline double startVelocity(double fingerVel, double minPx = MIN_PX_S, double maxPx = MAX_PX_S) {
+    if (std::abs(fingerVel) < minPx)
         return 0.0;
-    return std::clamp(-fingerVel, -MAX_PX_S, MAX_PX_S);
+    return std::clamp(-fingerVel, -maxPx, maxPx);
 }
 
 // Already scroll-space px/s -> velocity (same threshold and clamp, no
 // sign flip): for paths that tracked scroll-space travel directly.
-inline double startVelocityDirect(double scrollVel) {
-    if (std::abs(scrollVel) < MIN_PX_S)
+inline double startVelocityDirect(double scrollVel, double minPx = MIN_PX_S, double maxPx = MAX_PX_S) {
+    if (std::abs(scrollVel) < minPx)
         return 0.0;
-    return std::clamp(scrollVel, -MAX_PX_S, MAX_PX_S);
+    return std::clamp(scrollVel, -maxPx, maxPx);
 }
 
 // One exponential drain step; 0 once below the stop threshold.
-inline double drain(double vel, double dt) {
-    vel *= std::exp(-FRICTION * dt);
-    return std::abs(vel) < STOP_PX_S ? 0.0 : vel;
+inline double drain(double vel, double dt, double friction = FRICTION, double stop = STOP_PX_S) {
+    vel *= std::exp(-friction * dt);
+    return std::abs(vel) < stop ? 0.0 : vel;
 }
 
 } // namespace Fling

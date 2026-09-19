@@ -114,6 +114,24 @@ void registerHyprexpoConfigValues() {
                                                            HyprexpoConfig::WHEEL_SCROLL_SCALE_DEFAULT));
     addConfigValue(makeShared<Config::Values::CFloatValue>("plugin:hyprexpo:touchpad_scroll_scale", "touchpad scroll multiplier in the expose",
                                                            HyprexpoConfig::TOUCHPAD_SCROLL_SCALE_DEFAULT));
+    // Fling + commit tuning (shared drawer/ribbon physics; logic stays in Hyprexpo::Fling).
+    addConfigValue(makeShared<Config::Values::CFloatValue>("plugin:hyprexpo:fling_min_px_s", "fling start threshold px/s",
+                                                           HyprexpoConfig::FLING_MIN_PX_S_DEFAULT));
+    addConfigValue(makeShared<Config::Values::CFloatValue>("plugin:hyprexpo:fling_max_px_s", "fling release-spike clamp px/s",
+                                                           HyprexpoConfig::FLING_MAX_PX_S_DEFAULT));
+    addConfigValue(makeShared<Config::Values::CFloatValue>("plugin:hyprexpo:fling_friction", "fling exponential drain per second",
+                                                           HyprexpoConfig::FLING_FRICTION_DEFAULT));
+    addConfigValue(makeShared<Config::Values::CFloatValue>("plugin:hyprexpo:fling_stop_px_s", "fling dead-stop threshold px/s",
+                                                           HyprexpoConfig::FLING_STOP_PX_S_DEFAULT));
+    addConfigValue(makeShared<Config::Values::CFloatValue>("plugin:hyprexpo:fling_window_s", "fling trailing slope window seconds",
+                                                           HyprexpoConfig::FLING_WINDOW_S_DEFAULT));
+    addConfigValue(makeShared<Config::Values::CFloatValue>("plugin:hyprexpo:fling_commit_projection_s", "pull-commit projected travel horizon seconds",
+                                                           HyprexpoConfig::FLING_COMMIT_PROJECTION_S_DEFAULT));
+    // Expose backdrop: picture path (empty = black), then a tint layer over it.
+    addConfigValue(makeShared<Config::Values::CStringValue>("plugin:hyprexpo:expose_bg_picture", "expose background picture path (empty = black)",
+                                                            HyprexpoConfig::EXPOSE_BG_PICTURE_DEFAULT));
+    addConfigValue(makeShared<Config::Values::CColorValue>("plugin:hyprexpo:expose_bg_tint_col", "tint over the expose backdrop",
+                                                           HyprexpoConfig::EXPOSE_BG_TINT_COL_DEFAULT));
     addConfigValue(makeShared<Config::Values::CIntValue>("plugin:hyprexpo:tile_rounding_focus", "focus tile rounding", HyprexpoConfig::TILE_ROUNDING_FOCUS_DEFAULT));
     addConfigValue(makeShared<Config::Values::CIntValue>("plugin:hyprexpo:tile_rounding_current", "current tile rounding", HyprexpoConfig::TILE_ROUNDING_CURRENT_DEFAULT));
     addConfigValue(makeShared<Config::Values::CIntValue>("plugin:hyprexpo:tile_rounding_hover", "hover tile rounding", HyprexpoConfig::TILE_ROUNDING_HOVER_DEFAULT));

@@ -607,6 +607,27 @@ static int luaRibbonRelease(lua_State* L) {
     return 0;
 }
 
+static int luaGestureRelease(lua_State* L) {
+    (void)L;
+    if (auto* const OV = luaOverview())
+        OV->gestureRelease();
+    return 0;
+}
+
+static int luaFingerDown(lua_State* L) {
+    (void)L;
+    if (auto* const OV = luaOverview())
+        OV->gestureBegin();
+    return 0;
+}
+
+static int luaRibbonScrollBy(lua_State* L) {
+    const double dx = luaL_checknumber(L, 1);
+    if (auto* const OV = luaOverview())
+        OV->ribbonScrollFromGesture(dx);
+    return 0;
+}
+
 static int luaFocusSearch(lua_State* L) {
     (void)L;
     if (auto* const OV = luaOverview())
@@ -997,6 +1018,9 @@ void registerHyprexpoDispatchers() {
     HyprlandAPI::addLuaFunction(PHANDLE, "hyprexpo", "drawer_up", luaDrawerUp);
     HyprlandAPI::addLuaFunction(PHANDLE, "hyprexpo", "drawer_cancel", luaDrawerCancel);
     HyprlandAPI::addLuaFunction(PHANDLE, "hyprexpo", "ribbon_release", luaRibbonRelease);
+    HyprlandAPI::addLuaFunction(PHANDLE, "hyprexpo", "gesture_release", luaGestureRelease);
+    HyprlandAPI::addLuaFunction(PHANDLE, "hyprexpo", "finger_down", luaFingerDown);
+    HyprlandAPI::addLuaFunction(PHANDLE, "hyprexpo", "ribbon_scroll_by", luaRibbonScrollBy);
     HyprlandAPI::addLuaFunction(PHANDLE, "hyprexpo", "focus_search", luaFocusSearch);
     HyprlandAPI::addLuaFunction(PHANDLE, "hyprexpo", "focus_at", luaFocusAt);
     HyprlandAPI::addLuaFunction(PHANDLE, "hyprexpo", "on", Hyprexpo::LuaEvents::luaOn);
