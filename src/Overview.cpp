@@ -1205,10 +1205,13 @@ void COverview::ribbonScrollToWorkspace(int wsid) {
         return;
     const auto   strip  = ribbonStrip(MON->m_size, cols, count, (double)GAP_WIDTH, outer, drawer.searchH(), drawer.rowH(), 0.0);
     const double center = strip.x0 + (double)id * (strip.tileW + Hyprexpo::Ribbon::GAP_MULTIPLIER * (double)GAP_WIDTH) + strip.tileW / 2.0;
-    // Animated: stepRibbon eases toward the goal (same rate family as the
-    // sheet snap); direct pans/flings clear the goal and take over.
-    ribbonVel     = 0.0;
-    ribbonTargetX = strip.maxScroll <= 0.0 ? 0.0 : std::clamp(center - MON->m_size.x / 2.0, 0.0, strip.maxScroll);
+    // Animated glide (see stepRibbon): position is a pure function of
+    // elapsed time — arm fromX/T0 here or the first frame snaps straight
+    // to the goal. Direct pans/flings clear the goal and take over.
+    ribbonVel         = 0.0;
+    ribbonTargetFromX = ribbonScrollX;
+    ribbonTargetT0    = std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
+    ribbonTargetX     = strip.maxScroll <= 0.0 ? 0.0 : std::clamp(center - MON->m_size.x / 2.0, 0.0, strip.maxScroll);
     damage();
 }
 
