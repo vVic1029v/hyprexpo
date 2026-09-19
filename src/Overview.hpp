@@ -72,6 +72,7 @@ class COverview final : public IOverviewSession {
     bool          onKbSelectToken(int visibleIdx);
     bool          selectVisibleToken(const std::string& token);
     int64_t       selectedWorkspaceID() const;
+    int64_t       focusedWorkspaceID() const; // kbFocus tile's ID (select-workspace-first target)
     bool          selectWorkspaceByID(int64_t workspaceID);
     bool          selectVisibleIndex(size_t index);
     bool          moveWindowBetweenVisibleIndices(size_t sourceIndex, size_t targetIndex, const PHLWINDOW& window = nullptr);

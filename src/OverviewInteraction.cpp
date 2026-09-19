@@ -37,6 +37,13 @@ int64_t COverview::selectedWorkspaceID() const {
     return images[id].workspaceID;
 }
 
+int64_t COverview::focusedWorkspaceID() const {
+    if (!isTileValid(kbFocusID))
+        return WORKSPACE_INVALID;
+
+    return images[kbFocusID].workspaceID;
+}
+
 bool COverview::selectWorkspaceByID(int64_t workspaceID) {
     if (closing)
         return false;
@@ -555,17 +562,24 @@ void COverview::touchPressUp(int32_t touchID) {
         if (std::hypot(md.x, md.y) >= TOUCH_DRAG_PX)
             return;
     }
-    // tap: historical behavior, evaluated at the release point
-    if (!mon)
-        return;
+    // tap: select-workspace-first. First tap on a tile only focuses it
+    // (green outline, stays open); tapping the focused tile confirms and
+    // goes. Apps launched afterwards open on the focused workspace.
     if (OWNER->size->getPercent() < 0.05f) {
         OWNER->close(false);
         return;
     }
     OWNER->lastMousePosLocal = upGlobal - mon->m_position;
     OWNER->updateHoveredFromMouse();
-    if (OWNER->selectHoveredWorkspace())
-        closeOverviewsSelecting(OWNER);
+    if (OWNER->selectHoveredWorkspace()) {
+        if (OWNER->kbFocusID != OWNER->closeOnID) {
+            OWNER->kbFocusID = OWNER->closeOnID;
+            OWNER->closeOnID = -1;
+            OWNER->damage();
+        } else {
+            closeOverviewsSelecting(OWNER);
+        }
+    }
 }
 
 void COverview::touchPressCancel(int32_t touchID) {
@@ -836,6 +850,10 @@ bool COverview::onKbMoveFocus(const std::string& dir) {
         return false;
 
     if (moveFocus(dx, dy)) {
+        // Keep the newly focused tile centered (clamped at the strip ends),
+        // same as open-time centering.
+        if (isTileValid(kbFocusID))
+            ribbonScrollToWorkspace((int)images[kbFocusID].workspaceID);
         damage();
         return true;
     }

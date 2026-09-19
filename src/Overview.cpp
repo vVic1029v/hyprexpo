@@ -1091,13 +1091,14 @@ void COverview::stepRibbon() {
     const double dt  = ribbonLastStepS <= 0.0 ? 0.016 : std::min(0.1, now - ribbonLastStepS);
     ribbonLastStepS  = now;
     if (ribbonVel == 0.0) {
-        // Touchpads have no release event: a fast trailing burst that just
-        // went quiet coasts like a touch flick (same shared physics). Slow
-        // trailing slopes stay below the start threshold: no fling.
+        // Touchpads have no release event: a fast burst that just went
+        // quiet coasts on its PEAK velocity (the trailing slope would only
+        // see the lift tail). Same shared threshold/clamp below. Slow
+        // trailing bursts stay under threshold: no fling.
         // Frames are sustained until the eval window lapses — without this
         // the pump dies with the burst and the idle eval never runs.
         if (!closing && !drawer.hidesRibbon() && wheelS > 0.0 && now - wheelS > 0.08 && now - wheelS < 0.5) {
-            ribbonVel = Hyprexpo::Fling::startVelocityDirect(wheelTrack.slope(now));
+            ribbonVel = Hyprexpo::Fling::startVelocityDirect(wheelTrack.peak(0.3));
             wheelS    = 0.0;
             wheelTrack.reset();
             if (ribbonVel != 0.0)
@@ -1535,8 +1536,18 @@ COverview::COverview(PHLWORKSPACE startedOn_, PHLMONITOR monitor_, bool swipe_, 
                 return;
         }
 
-        if (TARGET && TARGET->selectHoveredWorkspace())
-            closeOverviewsSelecting(TARGET);
+        if (TARGET && TARGET->selectHoveredWorkspace()) {
+            // Select-workspace-first, like touch: first click focuses the
+            // tile (green outline, stays open), clicking the focused tile
+            // confirms and goes.
+            if (TARGET->kbFocusID != TARGET->closeOnID) {
+                TARGET->kbFocusID = TARGET->closeOnID;
+                TARGET->closeOnID = -1;
+                TARGET->damage();
+            } else {
+                closeOverviewsSelecting(TARGET);
+            }
+        }
     };
 
     // Touch hold-to-drag wrapper (classic grid path): a touch down only arms
@@ -1667,13 +1678,16 @@ COverview::COverview(PHLWORKSPACE startedOn_, PHLMONITOR monitor_, bool swipe_, 
                 // Fresh scroll input stops coasting (wheel takes over);
                 // touchpad bursts feed the release fling (no release event).
                 if (event.axis == WL_POINTER_AXIS_HORIZONTAL_SCROLL) {
-                    OV->ribbonVel = 0.0;
+                    const double scaled = raw * (discrete ? 4.0 : 2.5);
+                    if (std::abs(scaled) < 2.0)
+                        continue; // driver noise: kills no coast, feeds nothing, jitters nothing
+                    OV->ribbonVel = 0.0; // fresh input takes over: inertia stops
                     if (!discrete) {
                         const double nowWheel = std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
-                        OV->wheelTrack.push(nowWheel, raw * 2.5);
+                        OV->wheelTrack.push(nowWheel, scaled);
                         OV->wheelS = nowWheel;
                     }
-                    OV->ribbonScrollBy(raw * (discrete ? 4.0 : 2.5));
+                    OV->ribbonScrollBy(scaled);
                 } else if (discrete) {
                     OV->ribbonVel = 0.0;
                     OV->ribbonScrollBy(raw * 4.0);
