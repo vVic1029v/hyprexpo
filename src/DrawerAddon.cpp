@@ -593,10 +593,15 @@ void CDrawerAddon::launch(size_t orderIdx) {
     }
     Log::logger->log(Log::ERR, "[hyprexpo] launching {}: {}", app.id, app.exec);
     HyprlandAPI::addNotification(PHANDLE, "Launching " + app.name, CHyprColor{0.16, 0.76, 0.87, 1.0}, 2000);
-    // Launch itself is detached; close() below destroys this session.
+    // Launch itself is detached; the close below destroys this session.
     Hyprexpo::Drawer::launchApp(app);
     state.searchFocused = false;
-    m_owner->close(false);
+    // Select-workspace-first: close onto the focused (green-outlined) tile
+    // so its workspace is created/selected first; the detached launch lands
+    // on the now-active workspace. Falls back to a plain dismiss.
+    if (m_owner->focusedWorkspaceID() != WORKSPACE_INVALID)
+        m_owner->selectWorkspaceByID(m_owner->focusedWorkspaceID());
+    closeOverviewsSelecting(m_owner);
 }
 
 // Focus an already-open app instead of launching a duplicate. Matches
@@ -685,6 +690,8 @@ void CDrawerAddon::clearQuery() {
 bool CDrawerAddon::confirmTop() {
     if (!state.searchFocused || state.order.empty())
         return false;
+    if (state.query.empty())
+        return false; // empty box: Enter selects the workspace, never the first app
     launch(0);
     return true;
 }
@@ -945,15 +952,12 @@ void CDrawerAddon::renderPass() {
         }
     }
 
-    // search strip: well + text + focus ring, crisp above the occluder
+    // search strip: well + text, crisp above the occluder. No focus ring
+    // by design: the box is always focused while the exposé is open, so a
+    // ring would sit there permanently instead of giving feedback.
     {
         CBox well = toPhys(CBox{{48.0, sTop}, {W - 96.0, sH}});
         Render::GL::g_pHyprOpenGL->renderRect(well, CHyprColor{0xff0a0a0a}, {.round = 10});
-        if (state.searchFocused) {
-            CBox ring = toPhys(CBox{{46.0, sTop - 2.0}, {W - 92.0, sH + 4.0}});
-            Render::GL::g_pHyprOpenGL->renderRect(ring, CHyprColor{0xff2ac3de}, {});
-            Render::GL::g_pHyprOpenGL->renderRect(well, CHyprColor{0xff0a0a0a}, {.round = 10});
-        }
         if (state.queryDirty || !state.searchTex) {
             const std::string text = state.query.empty() ? "Search apps…" : state.query;
             const CHyprColor col = state.query.empty() ? CHyprColor{0xff787c99} : CHyprColor{0xffa9b1d6};
