@@ -139,12 +139,12 @@ class CDrawerAddon final : public Hyprexpo::Addon::IOverviewAddon {
     // --- model glue ---
     void refilter();
     void tap(const Vector2D& local);
-    void launch(size_t orderIdx);
+    void launch(size_t orderIdx, bool forceNew = false);
     bool focusIfOpen(const Hyprexpo::Drawer::SApp& app);
     void typeText(const std::string& text);
     void backspace();
     void clearQuery();
-    bool confirmTop();
+    bool confirmTop(bool forceNew = false);
 
     // --- textures ---
     SP<Render::ITexture> iconTexture(const Hyprexpo::Drawer::SApp& app, int px, double scale);

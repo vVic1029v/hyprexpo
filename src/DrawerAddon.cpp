@@ -11,6 +11,7 @@
 
 #include <hyprland/src/Compositor.hpp>
 #include <hyprland/src/config/ConfigValue.hpp>
+#include <hyprland/src/config/shared/actions/ConfigActions.hpp>
 #include <hyprland/src/config/values/types/IntValue.hpp>
 #include <hyprland/src/config/values/types/FloatValue.hpp>
 #include <hyprland/src/debug/log/Logger.hpp>
@@ -581,15 +582,16 @@ void CDrawerAddon::tap(const Vector2D& local) {
     launch((size_t)idx);
 }
 
-void CDrawerAddon::launch(size_t orderIdx) {
+void CDrawerAddon::launch(size_t orderIdx, bool forceNew) {
     if (orderIdx >= state.order.size() || state.order[orderIdx] == Hyprexpo::Drawer::EMPTY_SLOT)
         return;
     const auto& app = state.apps[state.order[orderIdx]];
     // Tapping counts as use either way, so the recent row tracks it.
     Hyprexpo::Drawer::recordRecent(app.id);
-    // Already open: focus it (visible feedback) instead of duplicating.
-    // Terminals exempt: multi-instance tools open new, always.
-    if (!app.terminal && focusIfOpen(app)) {
+    // Already open: focus it (visible feedback) instead of duplicating —
+    // unless forced new (Shift+Enter). Terminals exempt: multi-instance
+    // tools open new, always.
+    if (!forceNew && !app.terminal && focusIfOpen(app)) {
         state.searchFocused = false;
         m_owner->close(false);
         return;
@@ -658,6 +660,13 @@ bool CDrawerAddon::focusIfOpen(const Hyprexpo::Drawer::SApp& app) {
             fallback = window;
     }
     if (fallback) {
+        // Switch to the window's workspace FIRST: focusing alone leaves you
+        // stranded on the old workspace while the app sits elsewhere.
+        if (fallback->m_workspace) {
+            const auto CHANGE = Config::Actions::changeWorkspace(fallback->m_workspace);
+            if (!CHANGE)
+                Log::logger->log(Log::ERR, "[hyprexpo] failed to change workspace: {}", CHANGE.error().message);
+        }
         const std::string out = HyprlandAPI::invokeHyprctlCommand(
             "dispatch", std::format("focuswindow address:{:x}", (uintptr_t)fallback.get()));
         if (!out.empty())
@@ -690,12 +699,12 @@ void CDrawerAddon::clearQuery() {
     refilter();
 }
 
-bool CDrawerAddon::confirmTop() {
+bool CDrawerAddon::confirmTop(bool forceNew) {
     if (!state.searchFocused || state.order.empty())
         return false;
     if (state.query.empty())
         return false; // empty box: Enter selects the workspace, never the first app
-    launch(0);
+    launch(0, forceNew);
     return true;
 }
 
@@ -998,7 +1007,12 @@ bool CDrawerAddon::searchKey(const IKeyboard::SKeyEvent& event) {
         return true;
     }
     if (sym == XKB_KEY_Return || sym == XKB_KEY_KP_Enter) {
-        return confirmTop();
+        // Shift+Enter always forces a new instance instead of focusing an
+        // existing window; plain Enter focuses-or-launches as usual.
+        bool shift = false;
+        if (const auto KB = g_pSeatManager->m_keyboard.lock(); KB && KB->m_xkbState)
+            shift = xkb_state_mod_name_is_active(KB->m_xkbState, XKB_MOD_NAME_SHIFT, XKB_STATE_MODS_DEPRESSED) != 0;
+        return confirmTop(shift);
     }
     char buf[8] = {};
     if (xkb_keysym_to_utf8(sym, buf, sizeof(buf)) > 0 && (unsigned char)buf[0] >= 0x20) {
