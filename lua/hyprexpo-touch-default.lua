@@ -1,8 +1,11 @@
 -- SHIPPED REFERENCE (read-only mirror of a live config; do not edit here).
 -- touch/hyprexpo.lua — DEFAULT hyprexpo touch layer (Phase 2): the touch
--- decision state machine, ported 1:1 from the C++ touch path. With this
--- loaded every handler consumes, so the C++ touch path idles (it stays as
--- the fallback for configs without this file — same behavior either way).
+-- decision state machine, ported 1:1 from the C++ touch path. Handlers run
+-- only while the exposé is open (is_open gate): with it closed they return
+-- untouched, so taps fall through to apps and hyprgrass pattern binds keep
+-- working system-wide. With it open every handler consumes, so the C++
+-- touch path idles (it stays as the fallback for configs without this
+-- file — same behavior either way).
 --
 -- Thresholds mirror plugin:hyprexpo:* and C++ defaults (see
 -- OverviewInteraction.cpp): HOLD_MS 350, DRAG_PX 12, SLOP 20
@@ -19,12 +22,19 @@ local HOLD_MS, DRAG_PX, SLOP = 350, 12.0, 20.0
 local press = nil
 local gen   = 0
 
+-- Stale-build safe: H.is_open may not exist on old plugin builds. Unknown
+-- state means hands off (fall through to C++/apps, never consume blind).
+local function expoLive()
+  return H.is_open and H.is_open()
+end
+
 local function dist2(p)
   local dx, dy = p.x - p.x0, p.y - p.y0
   return dx * dx + dy * dy
 end
 
 H.on("touchdown", function(ev)
+  if not expoLive() then press = nil return end
   press = { id = ev.id, x0 = ev.x, y0 = ev.y, x = ev.x, y = ev.y,
             region = H.region_at(ev.x, ev.y),
             panning = false, dragging = false }
@@ -44,6 +54,7 @@ H.on("touchdown", function(ev)
 end)
 
 H.on("touchmotion", function(ev)
+  if not expoLive() then return end
   local p = press
   if not p or p.id ~= ev.id then return end
   p.x, p.y = ev.x, ev.y
@@ -76,6 +87,7 @@ H.on("touchmotion", function(ev)
 end)
 
 H.on("touchup", function(ev)
+  if not expoLive() then press = nil return end
   local p = press
   if not p or p.id ~= ev.id then return end
   press = nil
@@ -97,6 +109,7 @@ H.on("touchup", function(ev)
 end)
 
 H.on("touchcancel", function(ev)
+  if not expoLive() then press = nil return end
   local p = press
   if not p or p.id ~= ev.id then return end
   press = nil
