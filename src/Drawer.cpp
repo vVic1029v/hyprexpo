@@ -361,15 +361,28 @@ std::vector<size_t> filterApps(const std::vector<SApp>& apps, const std::string&
     recentShown = 0;
     const std::string q = lowerFold(query);
     if (!q.empty()) {
-        // Searching: plain alphabetical matches, no sections.
-        std::vector<size_t> out;
+        // Ranked matches: exact name first, then name prefix, then name
+        // substring, then exec/other substring last. Alphabetical within
+        // each tier (scan order is already alphabetical). Without tiers a
+        // query like "steam" buries the Steam app under every game whose
+        // exec line merely mentions steam.
+        std::vector<size_t> exact, prefix, nameSub, execSub;
         for (size_t i = 0; i < apps.size(); ++i) {
             const std::string name = lowerFold(apps[i].name);
-            const std::string exec = lowerFold(apps[i].exec);
-            if (name.find(q) == std::string::npos && exec.find(q) == std::string::npos)
-                continue;
-            out.push_back(i);
+            if (name == q)
+                exact.push_back(i);
+            else if (name.compare(0, q.size(), q) == 0)
+                prefix.push_back(i);
+            else if (name.find(q) != std::string::npos)
+                nameSub.push_back(i);
+            else if (lowerFold(apps[i].exec).find(q) != std::string::npos)
+                execSub.push_back(i);
         }
+        std::vector<size_t> out;
+        out.insert(out.end(), exact.begin(), exact.end());
+        out.insert(out.end(), prefix.begin(), prefix.end());
+        out.insert(out.end(), nameSub.begin(), nameSub.end());
+        out.insert(out.end(), execSub.begin(), execSub.end());
         return out;
     }
     // Locked layout: exact recent row first, then everything else in scan
