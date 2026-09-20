@@ -1123,21 +1123,26 @@ void COverview::ribbonScrollFromGesture(double dx) {
 }
 
 namespace {
-// /tmp/touchpad-fingers, maintained by touch/fingers-watch.py: "1" while any
-// finger touches the pad, "0" when all lifted. Missing or stale (>2s) file
-// counts as unknown, which allows the fling (fail-open: behaves as if the
-// watcher never existed). A fresh "1" vetoes it: the fingers never left.
-bool touchpadFingersUp() {
+// /tmp/touchpad-fingers, maintained by touch/fingers-watch.py: "<down01>
+// <lift_ts>" (wall time of the last lift-off). A plain up/down level
+// wedges on resting palms or a missed event, so the LIFT TIMESTAMP (not
+// the level) decides: fling only on a recent lift. Missing, malformed or
+// stale (>2s, daemon dead) fails open to the old heuristic behavior.
+bool touchpadReleasedFresh() {
     struct stat st;
     if (stat("/tmp/touchpad-fingers", &st) != 0)
         return true;
-    if (std::time(nullptr) - st.st_mtime > 2)
+    const std::time_t nowWall = std::time(nullptr);
+    if (nowWall - st.st_mtime > 2)
         return true;
+    int    down = 1;
+    double lift = 0.0;
     std::ifstream f("/tmp/touchpad-fingers");
-    std::string   s;
-    if (!(f >> s))
+    if (!(f >> down >> lift))
         return true;
-    return s != "1";
+    if (down == 0)
+        return true; // clean release, fingers gone
+    return (double)(nowWall - lift) < 0.4 && lift > 0.0;
 }
 } // namespace
 
@@ -1180,8 +1185,8 @@ void COverview::stepRibbon() {
         if (!closing && !drawer.hidesRibbon() && wheelS > 0.0 && now - wheelS > 0.05 && now - wheelS < 0.5) {
             ribbonVel = Hyprexpo::Fling::startVelocityDirect(wheelTrack.slope(now, (double)Hyprexpo::FlingConfig::windowS()),
                                                             (double)Hyprexpo::FlingConfig::minPxS(), (double)Hyprexpo::FlingConfig::maxPxS());
-            if (ribbonVel != 0.0 && !touchpadFingersUp()) {
-                // Fingers never left: a pause mid-gesture, not a release.
+            if (ribbonVel != 0.0 && !touchpadReleasedFresh()) {
+                // No recent lift-off: a pause mid-gesture, not a release.
                 // Swallow it (consumed, no refire) instead of flinging.
                 ribbonVel = 0.0;
             }
