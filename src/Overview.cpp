@@ -1183,17 +1183,15 @@ void COverview::stepRibbon() {
         // Frames are sustained until the eval window lapses — without this
         // the pump dies with the burst and the idle eval never runs.
         if (!closing && !drawer.hidesRibbon() && wheelS > 0.0 && now - wheelS > 0.05 && now - wheelS < 0.5) {
-            ribbonVel = Hyprexpo::Fling::startVelocityDirect(wheelTrack.slope(now, (double)Hyprexpo::FlingConfig::windowS()),
-                                                            (double)Hyprexpo::FlingConfig::minPxS(), (double)Hyprexpo::FlingConfig::maxPxS());
-            if (ribbonVel != 0.0 && !touchpadReleasedFresh()) {
-                // No recent lift-off: a pause mid-gesture, not a release.
-                // Swallow it (consumed, no refire) instead of flinging.
-                ribbonVel = 0.0;
+            // Shared release (both trackers, same physics); the lift gate
+            // decides pause-vs-release first.
+            if (!touchpadReleasedFresh()) {
+                wheelS = 0.0;
+                wheelTrack.reset();
+                ribbonTrack.reset();
+            } else {
+                gestureRelease();
             }
-            wheelS    = 0.0;
-            wheelTrack.reset();
-            if (ribbonVel != 0.0)
-                damage();
         } else if (wheelS > 0.0 && now - wheelS < 0.5) {
             damage();
         }
@@ -1629,16 +1627,10 @@ COverview::COverview(PHLWORKSPACE startedOn_, PHLMONITOR monitor_, bool swipe_, 
         // A right-drag release that panned the ribbon ends here: consumed,
         // never falls through to workspace select (press may have started
         // off-ribbon after a re-grab, so the flag — not the region — decides).
-        // The release coasts like a touch flick (same shared physics).
+        // The release coasts like a touch flick: one shared release path.
         if (TARGET && TARGET->ribbonMousePan) {
             TARGET->ribbonMousePan = false;
-            const double nowUp      = std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
-            TARGET->ribbonVel       = Hyprexpo::Fling::startVelocityDirect(TARGET->wheelTrack.slope(nowUp, (double)Hyprexpo::FlingConfig::windowS()),
-                                                                         (double)Hyprexpo::FlingConfig::minPxS(), (double)Hyprexpo::FlingConfig::maxPxS());
-            TARGET->wheelTrack.reset();
-            TARGET->wheelS = 0.0;
-            if (TARGET->ribbonVel != 0.0)
-                TARGET->damage();
+            TARGET->gestureRelease();
             return;
         }
 

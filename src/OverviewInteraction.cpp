@@ -153,16 +153,23 @@ void COverview::gestureBegin() {
 }
 
 void COverview::gestureRelease() {
-    // Live-gesture end (trackpad) or plain touch release: coasts from the
-    // shared wheel tracker, same physics. No-op when nothing was tracked.
+    // Every release path (touch, trackpad idle, mouse drag) lands here:
+    // coasts from whichever tracker has motion, same physics. Touch pans
+    // feed ribbonTrack, touchpad/RMB feed wheelTrack; stale samples age
+    // out of the slope window, so max-abs is safe with no extra state.
     if (closing)
         return;
-    const double now = std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
-    ribbonVel        = Hyprexpo::Fling::startVelocityDirect(wheelTrack.slope(now, (double)Hyprexpo::FlingConfig::windowS()),
-                                                           (double)Hyprexpo::FlingConfig::minPxS(), (double)Hyprexpo::FlingConfig::maxPxS());
-    ribbonTargetX    = -1.0;
-    wheelS           = 0.0;
+    const double now        = std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
+    const double windowS    = (double)Hyprexpo::FlingConfig::windowS();
+    const double touchSlope = ribbonTrack.slope(now, windowS);
+    const double wheelSlope = wheelTrack.slope(now, windowS);
+    const double slope      = std::abs(touchSlope) >= std::abs(wheelSlope) ? touchSlope : wheelSlope;
+    ribbonVel               = Hyprexpo::Fling::startVelocityDirect(slope, (double)Hyprexpo::FlingConfig::minPxS(),
+                                                                  (double)Hyprexpo::FlingConfig::maxPxS());
+    ribbonTargetX           = -1.0;
+    wheelS                  = 0.0;
     wheelTrack.reset();
+    ribbonTrack.reset();
     if (ribbonVel != 0.0)
         damage();
 }
@@ -690,16 +697,9 @@ void COverview::touchPressUp(int32_t touchID) {
         return;
     }
     if (wasPanning) {
-        // Ribbon flick: release slope through the shared fling physics —
-        // same threshold, clamp, drain, and end-stop as the drawer list.
-        // Tracked scroll-space, so no sign flip: fingers fling right, the
-        // strip coasts right.
-        const double now = std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
-        OWNER->ribbonVel = Hyprexpo::Fling::startVelocityDirect(OWNER->ribbonTrack.slope(now, (double)Hyprexpo::FlingConfig::windowS()),
-                                                               (double)Hyprexpo::FlingConfig::minPxS(),
-                                                               (double)Hyprexpo::FlingConfig::maxPxS());
-        if (OWNER->ribbonVel != 0.0)
-            OWNER->damage();
+        // Same shared release as every other path (dedup: no second copy
+        // of the slope/threshold/damage logic).
+        OWNER->ribbonReleaseTouch();
         return; // release commits nothing else, never selects
     }
     if (wasDragging) {
