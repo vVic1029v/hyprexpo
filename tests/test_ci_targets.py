@@ -18,6 +18,18 @@ class TargetContractTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             ci.track_for_branch("feature/doc-fix")
 
+    def test_fork_exp_branches_use_the_release_contract(self):
+        # Fork work happens on exp/* (never sent upstream): same release
+        # track as master, reported under a known branch name so the matrix
+        # resolver never sees the exp name.
+        for base in ("exp/ribbon-drawer", "exp/lua-input", "exp/anything"):
+            self.assertEqual(
+                ci.contract("fork/hyprexpo", 0, base, "fork/hyprexpo", base, False),
+                {"track": "master", "gate": "Release gate", "kind": "promotion_or_development"},
+            )
+        with self.assertRaises(ValueError):
+            ci.contract("fork/hyprexpo", 0, "feature/doc-fix", "fork/hyprexpo", "feature/doc-fix", False)
+
     def test_current_contract_has_exact_commits(self):
         ci.targets()
 

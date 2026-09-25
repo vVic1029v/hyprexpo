@@ -77,7 +77,13 @@ def contract(repository, number, base, head_repository, head, draft):
         and head == tracker["head"]
     ):
         return {"track": "hyprland-git", "gate": "Tracking gate", "kind": "tracking"}
-    track_for_branch(base)
+    if not base.startswith("exp/"):
+        track_for_branch(base)
+    else:
+        # Fork branches track released Hyprland (desktops run releases, not
+        # Hyprland git): same contract as master, reported under its gate so
+        # the matrix resolver only ever sees known branch names.
+        return {"track": "master", "gate": "Release gate", "kind": "promotion_or_development"}
     return {"track": base, "gate": "Release gate" if base == "master" else "Development gate", "kind": "promotion_or_development"}
 
 

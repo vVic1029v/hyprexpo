@@ -2,9 +2,9 @@ name: Compatibility
 
 on:
   pull_request:
-    branches: [master, hyprland-git]
+    branches: [master, hyprland-git, exp/**]
   push:
-    branches: [master, hyprland-git]
+    branches: [master, hyprland-git, exp/**]
   workflow_dispatch:
     inputs:
       target_branch:
