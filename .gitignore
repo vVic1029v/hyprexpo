@@ -72,3 +72,6 @@ compile_commands.json
 
 # Local, disposable experiments
 /spikes/
+
+# Local-only LLM maintenance notes — NEVER COMMIT (machine-specific state).
+/LOCAL-MAINTENANCE.md
