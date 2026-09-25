@@ -1,5 +1,7 @@
 #include "IOverviewSession.hpp"
 
+#include "ConfigValues.hpp"
+#include "HyprexpoConfig.hpp"
 #include "HyprexpoLogic.hpp"
 #include "Overview.hpp"
 #include "ScrollingLayoutAdapter.hpp"
@@ -28,8 +30,14 @@ std::unique_ptr<IOverviewSession> createOverviewSession(const PHLWORKSPACE& star
     static std::atomic<uint64_t> nextGeneration = 1;
     const uint64_t generation = nextGeneration.fetch_add(1, std::memory_order_relaxed);
 
-    static auto const* POVERVIEWMODE = (Hyprlang::STRING const*)HyprlandAPI::getConfigValue(PHANDLE, "plugin:hyprexpo:overview_mode")->getDataStaticPtr();
-    const bool forcedGrid = Hyprexpo::overviewModePreferenceFromString(*POVERVIEWMODE) == Hyprexpo::EOverviewModePreference::Grid;
+    // Fresh null-checked read every open (NOT a cached raw pointer): the
+    // static-cached getDataStaticPtr() form segfaulted deterministically on
+    // first open (see crash logs 2026-09-25) — whether from a first-call
+    // registration race or a dangling pointer across config re-parses, the
+    // ConfigValues fallback ("auto") is always the safe answer here.
+    const bool forcedGrid =
+        Hyprexpo::overviewModePreferenceFromString(Hyprexpo::ConfigValues::getString("plugin:hyprexpo:overview_mode", HyprexpoConfig::OVERVIEW_MODE_DEFAULT)) ==
+        Hyprexpo::EOverviewModePreference::Grid;
 
     const bool detectedScrolling = !forcedGrid && Hyprexpo::Scrolling::workspaceUsesScrollingLayout(startedOn);
     if (detectedScrolling) {
